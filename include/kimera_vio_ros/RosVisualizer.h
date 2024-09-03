@@ -21,9 +21,9 @@
 #include <ros/ros.h>
 #include <tf/transform_broadcaster.h>
 
-#include <pose_graph_tools/PoseGraph.h>
-#include <pose_graph_tools/PoseGraphEdge.h>
-#include <pose_graph_tools/PoseGraphNode.h>
+#include <pose_graph_tools_msgs/PoseGraph.h>
+#include <pose_graph_tools_msgs/PoseGraphEdge.h>
+#include <pose_graph_tools_msgs/PoseGraphNode.h>
 
 #include <kimera-vio/backend/VioBackend-definitions.h>
 #include <kimera-vio/frontend/FrontendOutputPacketBase.h>
