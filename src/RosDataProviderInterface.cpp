@@ -15,6 +15,8 @@
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+#include <sensor_msgs/Range.h> 
+
 
 #include <kimera-vio/dataprovider/DataProviderInterface.h>
 #include <kimera-vio/visualizer/Visualizer3D.h>
@@ -35,11 +37,33 @@ RosDataProviderInterface::RosDataProviderInterface(const VioParams& vio_params)
     output_gt_poses_csv_.reset(new OfstreamWrapper("traj_gt.csv"));
   }
 
+  relative_distance_sub_ = nh_.subscribe<sensor_msgs::Range>(
+      "/relative_distance",
+      10, 
+      &RosDataProviderInterface::relativeDistanceCallback,
+      this);
+    
   if (VLOG_IS_ON(1)) printParsedParams();  // Print parameters to check.
 }
 
 RosDataProviderInterface::~RosDataProviderInterface() {
   VLOG(1) << "RosBaseDataProvider destructor called.";
+}
+
+void RosDataProviderInterface::relativeDistanceCallback(
+    const sensor_msgs::RangeConstPtr& msg) {
+  CHECK(msg);
+  RelativeDistanceData data;
+  data.distance = msg->range;
+  data.timestamp = msg->header.stamp.toNSec();
+
+  if (relative_distance_callback_) {
+    relative_distance_callback_(data);
+    VLOG(5) << "Published relative distance: " << data.distance
+            << " at timestamp: " << data.timestamp;
+  } else {
+    LOG(WARNING) << "Relative distance callback not registered!";
+  }
 }
 
 // TODO(marcus): From this documentation

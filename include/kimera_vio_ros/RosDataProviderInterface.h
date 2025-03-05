@@ -49,6 +49,8 @@ class RosDataProviderInterface : public DataProviderInterface {
       const sensor_msgs::ImageConstPtr& img_msg) const;
 
   void logGtData(const nav_msgs::OdometryConstPtr& odometry);
+  void relativeDistanceCallback(const sensor_msgs::RangeConstPtr& msg);
+
 
  protected:
   // Define Node Handler for general use (Parameter server)
@@ -60,6 +62,8 @@ class RosDataProviderInterface : public DataProviderInterface {
   // vio callback...
   // Pipeline params
   VioParams vio_params_;
+
+  ros::Subscriber relative_distance_sub_;
 
   bool log_gt_data_;
   bool is_header_written_poses_vio_;
