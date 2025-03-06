@@ -40,6 +40,8 @@ struct RosbagData {
   std::vector<nav_msgs::OdometryConstPtr> gt_odometry_;
   /// External odometry (only if available)
   std::vector<nav_msgs::OdometryConstPtr> external_odom_;
+  std::vector<your_package::DistanceMeasurement::ConstPtr> relative_distance_msgs_;
+  ///your_package::DistanceMeasurement 表示自定义的消息类型
 };
 
 class RosbagDataProvider : public RosDataProviderInterface {
@@ -60,6 +62,11 @@ class RosbagDataProvider : public RosDataProviderInterface {
   // Returns true if the whole rosbag was successfully played, false if ROS was
   // shutdown before the rosbag finished.
   bool spin() override;
+  
+  using RelativeDistanceCallback = std::function<void(const RelativeDistanceMeasurement&)>;
+  void registerRelativeDistanceCallback(const RelativeDistanceCallback& callback) {
+    relative_distance_callback_ = callback;
+  }
 
  private:
   // Parse rosbag data
@@ -70,6 +77,8 @@ class RosbagDataProvider : public RosDataProviderInterface {
   void sendImuDataToVio();
 
   void sendExternalOdometryToVio();
+
+  void sendRelativeDistanceToVio();
 
   // Get ground-truth nav state for VIO initialization.
   // It uses odometry messages inside of the rosbag as ground-truth (indexed
@@ -103,6 +112,9 @@ class RosbagDataProvider : public RosDataProviderInterface {
   std::string imu_topic_;
   std::string gt_odom_topic_;
   std::string external_odom_topic_;
+  std::string relative_distance_topic_;
+  std::vector<kimera_vio_ros::DistanceMeasurement::ConstPtr> relative_distance_msgs_;
+
 
   ros::Publisher clock_pub_;
   ros::Publisher imu_pub_;
@@ -110,6 +122,7 @@ class RosbagDataProvider : public RosDataProviderInterface {
   ros::Publisher right_img_pub_;
   ros::Publisher gt_odometry_pub_;
   ros::Publisher external_odometry_pub_;
+  ros::Publisher relative_distance_pub_;
 
   Timestamp timestamp_last_frame_;
   Timestamp timestamp_last_kf_;
@@ -124,6 +137,10 @@ class RosbagDataProvider : public RosDataProviderInterface {
   size_t k_last_imu_;
   size_t k_last_gt_;
   size_t k_last_odom_;
+
+  size_t k_last_distance_ = 0u;
+  Timestamp timestamp_last_distance_ = std::numeric_limits<Timestamp>::min();
+
 
   bool use_external_odom_;
 };

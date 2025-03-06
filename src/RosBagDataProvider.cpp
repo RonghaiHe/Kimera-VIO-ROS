@@ -26,12 +26,14 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
       imu_topic_(""),
       gt_odom_topic_(""),
       external_odom_topic_(""),
+      relative_distance_topic_(""),
       clock_pub_(),
       imu_pub_(),
       left_img_pub_(),
       right_img_pub_(),
       gt_odometry_pub_(),
       external_odometry_pub_(),
+      relative_distance_pub_(),
       timestamp_last_frame_(std::numeric_limits<Timestamp>::min()),
       timestamp_last_kf_(std::numeric_limits<Timestamp>::min()),
       timestamp_last_imu_(std::numeric_limits<Timestamp>::min()),
@@ -93,7 +95,6 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   }
 
   if (use_external_odom_) {
-    use_external_odom_ = true;
     if (!external_odom_topic_.empty()) {
       external_odometry_pub_ =
           nh_.advertise<nav_msgs::Odometry>(external_odom_topic_, kQueueSize);
@@ -101,6 +102,15 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
       LOG(WARNING) << "use_external_odom set to true but no topic provided.";
     }
   }
+
+  if (!relative_distance_topic_.empty()) {
+    relative_distance_pub_ = nh_.advertise<kimera_vio_ros::DistanceMeasurement>(
+        relative_distance_topic_, kQueueSize);
+  }
+}
+
+void RosbagDataProvider::registerRelativeDistanceCallback(const RelativeDistanceCallback& callback) {
+  relative_distance_callback_ = callback;
 }
 
 void RosbagDataProvider::initialize() {
@@ -134,6 +144,19 @@ void RosbagDataProvider::sendImuDataToVio() {
   }
 }
 
+void RosbagDataProvider::sendRelativeDistanceToVio() {
+  CHECK(relative_distance_callback_) 
+      << "Did you forget to register the relative distance callback?";
+  for (const your_package::DistanceMeasurementConstPtr& distance_msg : 
+       rosbag_data_.relative_distance_msgs_) {
+    const Timestamp& timestamp = distance_msg->header.stamp.toNSec();
+    const float distance = distance_msg->distance;
+    const uint16_t target_robot_id = distance_msg->target_robot_id;
+    relative_distance_callback_(RelativeDistanceMeasurement(
+        timestamp, distance, target_robot_id));
+  }
+}
+
 void RosbagDataProvider::sendExternalOdometryToVio() {
   CHECK(external_odom_callback_)
       << "Did you forget to register the external odometry callback?";
@@ -157,6 +180,7 @@ bool RosbagDataProvider::spin() {
     if (use_external_odom_) {
       sendExternalOdometryToVio();
     }
+    sendRelativeDistanceToVio(); 
   }
 
   const Timestamp last_imu =
@@ -274,163 +298,173 @@ bool RosbagDataProvider::spin() {
 
 bool RosbagDataProvider::parseRosbag(const std::string& bag_path,
                                      RosbagData* rosbag_data) {
-  LOG(INFO) << "Parsing rosbag data.";
-  CHECK_NOTNULL(rosbag_data);
+    LOG(INFO) << "Parsing rosbag data.";
+    CHECK_NOTNULL(rosbag_data);
 
-  // Fill in rosbag to data_
-  rosbag::Bag bag;
-  bag.open(bag_path, rosbag::bagmode::Read);
+    // Fill in rosbag to data_
+    rosbag::Bag bag;
+    bag.open(bag_path, rosbag::bagmode::Read);
 
-  // Generate list of topics to parse:
-  std::vector<std::string> topics;
-  topics.push_back(left_imgs_topic_);
-  if (vio_params_.frontend_type_ == FrontendType::kStereoImu) {
-    topics.push_back(right_imgs_topic_);
-  }
-  if (vio_params_.frontend_type_ == FrontendType::kRgbdImu) {
-    topics.push_back(depth_imgs_topic_);
-  }
-
-  topics.push_back(imu_topic_);
-  if (!gt_odom_topic_.empty()) {
-    LOG_IF(WARNING, vio_params_.backend_params_->autoInitialize_ != 0)
-        << "Provided a gt_odom_topic; but autoInitialize "
-           "(BackendParameters.yaml) is not set to 0,"
-           " meaning no ground-truth initialization will be done... "
-           "Are you sure you don't want to use gt?)";
-    topics.push_back(gt_odom_topic_);
-  } else {
-    // TODO(Toni): autoinit should be a bool...
-    CHECK_EQ(vio_params_.backend_params_->autoInitialize_, 1)
-        << "Requested ground-truth initialization, but no gt_odom_topic "
-           "was given. Make sure you set ground_truth_odometry_rosbag_topic, "
-           "or turn autoInitialize to false in BackendParameters.yaml.";
-  }
-  if (use_external_odom_) {
-    topics.push_back(external_odom_topic_);
-  }
-
-  std::stringstream ss;
-  ss << "query topics:" << std::endl;
-  ss << "=============" << std::endl;
-  for (const auto& topic : topics) {
-    ss << " - " << topic << std::endl;
-  }
-  VLOG(2) << ss.str();
-
-  // Query rosbag for given topics
-  rosbag::View view(bag, rosbag::TopicQuery(topics));
-
-  int imu_msg_count = 0;
-  // Keep track of this since we expect IMU data before an image.
-  bool start_parsing_stereo = false;
-  // For some datasets, we have duplicated measurements for the same time.
-  Timestamp last_imu_timestamp = 0;
-  for (const rosbag::MessageInstance& msg : view) {
-    const std::string& msg_topic = msg.getTopic();
-
-    // Check if msg is an IMU measurement.
-    sensor_msgs::ImuConstPtr imu_msg = msg.instantiate<sensor_msgs::Imu>();
-    if (imu_msg != nullptr && msg_topic == imu_topic_) {
-      const ImuStamp& imu_data_timestamp = imu_msg->header.stamp.toNSec();
-      if (imu_data_timestamp > last_imu_timestamp) {
-        VLOG(10) << "IMU msg count: " << imu_msg_count++;
-        rosbag_data->imu_msgs_.push_back(imu_msg);
-        last_imu_timestamp = imu_data_timestamp;
-      } else {
-        if (imu_data_timestamp - last_imu_timestamp == 0u) {
-          LOG(WARNING) << "IMU timestamps in rosbag are repeated!\n"
-                       << "Offending timestamp: " << imu_data_timestamp;
-        } else {
-          LOG(FATAL) << "IMU timestamps in rosbag are out of order: consider "
-                     << "re-ordering rosbag: \n"
-                     << "- Current IMU timestamp: " << imu_data_timestamp
-                     << '\n'
-                     << "- Last IMU timestamp: " << last_imu_timestamp << '\n'
-                     << "Difference (current - last) = "
-                     << imu_data_timestamp - last_imu_timestamp;
-        }
-      }
-      start_parsing_stereo = true;
-      continue;
+    // Generate list of topics to parse:
+    std::vector<std::string> topics;
+    topics.push_back(left_imgs_topic_);
+    if (vio_params_.frontend_type_ == FrontendType::kStereoImu) {
+        topics.push_back(right_imgs_topic_);
+    }
+    if (vio_params_.frontend_type_ == FrontendType::kRgbdImu) {
+        topics.push_back(depth_imgs_topic_);
     }
 
-    // Check if msg is an image.
-    sensor_msgs::ImageConstPtr img_msg = msg.instantiate<sensor_msgs::Image>();
-    if (img_msg != nullptr) {
-      if (start_parsing_stereo) {
-        // Check left or right image.
-        if (msg_topic == left_imgs_topic_) {
-          // Timestamp is in nanoseconds
-          rosbag_data->timestamps_.push_back(img_msg->header.stamp.toNSec());
-          rosbag_data->left_imgs_.push_back(img_msg);
-        } else if (vio_params_.frontend_type_ == FrontendType::kStereoImu &&
-                   msg_topic == right_imgs_topic_) {
-          rosbag_data->right_imgs_.push_back(img_msg);
-        } else if (vio_params_.frontend_type_ == FrontendType::kRgbdImu &&
-                   msg_topic == depth_imgs_topic_) {
-          rosbag_data->depth_imgs_.push_back(img_msg);
-        } else {
-          LOG(WARNING) << "Img with unexpected topic: " << msg_topic;
-        }
-      } else {
-        LOG(WARNING) << "Skipping first frame in rosbag, since IMU data not "
-                        "yet available.";
-      }
-      continue;
-    }
-
-    // Check if msg is a ground-truth odometry message.
-    nav_msgs::OdometryConstPtr odom_msg = msg.instantiate<nav_msgs::Odometry>();
-    if (odom_msg != nullptr) {
-      // handle gt
-      if (msg_topic == gt_odom_topic_) {
-        rosbag_data->gt_odometry_.push_back(odom_msg);
-        if (log_gt_data_) {
-          logGtData(odom_msg);
-        }
-      } else if (msg_topic != external_odom_topic_) {
-        LOG(ERROR) << "Unrecognized topic name for odometry msg. We were"
-                      " expecting ground-truth odometry on this topic: "
-                   << msg_topic;
-      }
-      // handle odom
-      if (use_external_odom_ && msg_topic == external_odom_topic_) {
-        rosbag_data->external_odom_.push_back(odom_msg);
-      }
+    topics.push_back(imu_topic_);
+    if (!gt_odom_topic_.empty()) {
+        LOG_IF(WARNING, vio_params_.backend_params_->autoInitialize_ != 0)
+            << "Provided a gt_odom_topic; but autoInitialize "
+               "(BackendParameters.yaml) is not set to 0,"
+               " meaning no ground-truth initialization will be done... "
+               "Are you sure you don't want to use gt?)";
+        topics.push_back(gt_odom_topic_);
     } else {
-      LOG(ERROR) << "Could not find the type of this rosbag msg from topic:\n"
-                 << msg_topic;
+        // TODO(Toni): autoinit should be a bool...
+        CHECK_EQ(vio_params_.backend_params_->autoInitialize_, 1)
+            << "Requested ground-truth initialization, but no gt_odom_topic "
+               "was given. Make sure you set ground_truth_odometry_rosbag_topic, "
+               "or turn autoInitialize to false in BackendParameters.yaml.";
     }
-  }
-  bag.close();
+    if (use_external_odom_) {
+        topics.push_back(external_odom_topic_);
+    }
+    if (!relative_distance_topic_.empty()) {
+        topics.push_back(relative_distance_topic_);
+    }
 
-  // Sanity check:
-  LOG_IF(FATAL,
-         rosbag_data->left_imgs_.size() == 0 ||
-             (vio_params_.frontend_type_ == FrontendType::kStereoImu &&
-              rosbag_data->right_imgs_.size() == 0))
-      << "No images parsed from rosbag.";
-  if (vio_params_.frontend_type_ == FrontendType::kStereoImu)
+    std::stringstream ss;
+    ss << "query topics:" << std::endl;
+    ss << "=============" << std::endl;
+    for (const auto& topic : topics) {
+        ss << " - " << topic << std::endl;
+    }
+    VLOG(2) << ss.str();
+
+    // Query rosbag for given topics
+    rosbag::View view(bag, rosbag::TopicQuery(topics));
+
+    int imu_msg_count = 0;
+    // Keep track of this since we expect IMU data before an image.
+    bool start_parsing_stereo = false;
+    // For some datasets, we have duplicated measurements for the same time.
+    Timestamp last_imu_timestamp = 0;
+    for (const rosbag::MessageInstance& msg : view) {
+        const std::string& msg_topic = msg.getTopic();
+
+        // Check if msg is an IMU measurement.
+        sensor_msgs::ImuConstPtr imu_msg = msg.instantiate<sensor_msgs::Imu>();
+        if (imu_msg != nullptr && msg_topic == imu_topic_) {
+            const ImuStamp& imu_data_timestamp = imu_msg->header.stamp.toNSec();
+            if (imu_data_timestamp > last_imu_timestamp) {
+                VLOG(10) << "IMU msg count: " << imu_msg_count++;
+                rosbag_data->imu_msgs_.push_back(imu_msg);
+                last_imu_timestamp = imu_data_timestamp;
+            } else {
+                if (imu_data_timestamp - last_imu_timestamp == 0u) {
+                    LOG(WARNING) << "IMU timestamps in rosbag are repeated!\n"
+                                 << "Offending timestamp: " << imu_data_timestamp;
+                } else {
+                    LOG(FATAL) << "IMU timestamps in rosbag are out of order: consider "
+                               << "re-ordering rosbag: \n"
+                               << "- Current IMU timestamp: " << imu_data_timestamp
+                               << '\n'
+                               << "- Last IMU timestamp: " << last_imu_timestamp << '\n'
+                               << "Difference (current - last) = "
+                               << imu_data_timestamp - last_imu_timestamp;
+                }
+            }
+            start_parsing_stereo = true;
+            continue;
+        }
+
+        // Check if msg is an image.
+        sensor_msgs::ImageConstPtr img_msg = msg.instantiate<sensor_msgs::Image>();
+        if (img_msg != nullptr) {
+            if (start_parsing_stereo) {
+                // Check left or right image.
+                if (msg_topic == left_imgs_topic_) {
+                    // Timestamp is in nanoseconds
+                    rosbag_data->timestamps_.push_back(img_msg->header.stamp.toNSec());
+                    rosbag_data->left_imgs_.push_back(img_msg);
+                } else if (vio_params_.frontend_type_ == FrontendType::kStereoImu &&
+                           msg_topic == right_imgs_topic_) {
+                    rosbag_data->right_imgs_.push_back(img_msg);
+                } else if (vio_params_.frontend_type_ == FrontendType::kRgbdImu &&
+                           msg_topic == depth_imgs_topic_) {
+                    rosbag_data->depth_imgs_.push_back(img_msg);
+                } else {
+                    LOG(WARNING) << "Img with unexpected topic: " << msg_topic;
+                }
+            } else {
+                LOG(WARNING) << "Skipping first frame in rosbag, since IMU data not "
+                                "yet available.";
+            }
+            continue;
+        }
+
+        // Check if msg is a ground-truth odometry message.
+        nav_msgs::OdometryConstPtr odom_msg = msg.instantiate<nav_msgs::Odometry>();
+        if (odom_msg != nullptr) {
+            // handle gt
+            if (msg_topic == gt_odom_topic_) {
+                rosbag_data->gt_odometry_.push_back(odom_msg);
+                if (log_gt_data_) {
+                    logGtData(odom_msg);
+                }
+            } else if (msg_topic != external_odom_topic_) {
+                LOG(ERROR) << "Unrecognized topic name for odometry msg. We were"
+                              " expecting ground-truth odometry on this topic: "
+                           << msg_topic;
+            }
+            // handle odom
+            if (use_external_odom_ && msg_topic == external_odom_topic_) {
+                rosbag_data->external_odom_.push_back(odom_msg);
+            }
+        } else {
+            LOG(ERROR) << "Could not find the type of this rosbag msg from topic:\n"
+                       << msg_topic;
+        }
+
+        // 处理相对距离消息
+        your_package::DistanceMeasurement::ConstPtr distance_msg = msg.instantiate<your_package::DistanceMeasurement>();
+        if (distance_msg != nullptr && msg_topic == relative_distance_topic_) {
+            rosbag_data->relative_distance_msgs_.push_back(distance_msg);
+        }
+    }
+
+    bag.close();
+
+    // Sanity check:
     LOG_IF(FATAL,
-           rosbag_data->left_imgs_.size() != rosbag_data->right_imgs_.size())
-        << "Unequal number of images from left and right cameras.";
-  LOG_IF(FATAL, rosbag_data->imu_msgs_.size() <= rosbag_data->left_imgs_.size())
-      << "Less than or equal number of imu data as image data.";
-  LOG_IF(FATAL,
-         !gt_odom_topic_.empty() && rosbag_data->gt_odometry_.size() == 0)
-      << "Requested to parse ground-truth odometry, but parsed 0 msgs.";
-  LOG_IF(WARNING,
-         !gt_odom_topic_.empty() &&
-             rosbag_data->gt_odometry_.size() < rosbag_data->left_imgs_.size())
-      << "Fewer ground_truth data than image data.";
-  LOG_IF(
-      WARNING,
-      !external_odom_topic_.empty() && use_external_odom_ &&
-          rosbag_data->external_odom_.size() < rosbag_data->left_imgs_.size())
-      << "Fewer external odometry messages than image data.";
-  LOG(INFO) << "Finished parsing rosbag data.";
-  return true;
+           rosbag_data->left_imgs_.size() == 0 ||
+               (vio_params_.frontend_type_ == FrontendType::kStereoImu &&
+                rosbag_data->right_imgs_.size() == 0))
+        << "No images parsed from rosbag.";
+    if (vio_params_.frontend_type_ == FrontendType::kStereoImu)
+        LOG_IF(FATAL,
+               rosbag_data->left_imgs_.size() != rosbag_data->right_imgs_.size())
+            << "Unequal number of images from left and right cameras.";
+    LOG_IF(FATAL, rosbag_data->imu_msgs_.size() <= rosbag_data->left_imgs_.size())
+        << "Less than or equal number of imu data as image data.";
+    LOG_IF(FATAL,
+           !gt_odom_topic_.empty() && rosbag_data->gt_odometry_.size() == 0)
+        << "Requested to parse ground-truth odometry, but parsed 0 msgs.";
+    LOG_IF(WARNING,
+           !gt_odom_topic_.empty() &&
+               rosbag_data->gt_odometry_.size() < rosbag_data->left_imgs_.size())
+        << "Fewer ground_truth data than image data.";
+    LOG_IF(
+        WARNING,
+        !external_odom_topic_.empty() && use_external_odom_ &&
+            rosbag_data->external_odom_.size() < rosbag_data->left_imgs_.size())
+        << "Fewer external odometry messages than image data.";
+    LOG(INFO) << "Finished parsing rosbag data.";
+    return true;
 }
 
 VioNavState RosbagDataProvider::getGroundTruthVioNavState(
@@ -488,6 +522,17 @@ void RosbagDataProvider::publishInputs(const Timestamp& timestamp_kf) {
     }
   }
 
+  // Publish relative distance data:
+  if (k_last_distance_ < rosbag_data_.relative_distance_msgs_.size()) {
+    while (timestamp_last_distance_ < timestamp_kf &&
+           k_last_distance_ < rosbag_data_.relative_distance_msgs_.size()) {
+      relative_distance_pub_.publish(
+          rosbag_data_.relative_distance_msgs_.at(k_last_distance_));
+      timestamp_last_distance_ = 
+          rosbag_data_.relative_distance_msgs_.at(k_last_distance_)->header.stamp.toNSec();
+      k_last_distance_++;
+    }
+  }
   // Publish input images if available:
   switch (vio_params_.frontend_type_) {
     case FrontendType::kMonoImu: {
