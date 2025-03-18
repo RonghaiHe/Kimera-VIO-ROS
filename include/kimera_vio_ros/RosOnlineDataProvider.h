@@ -71,6 +71,9 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
   bool reinit_flag_ = false;
   ReinitPacket reinit_packet_ = ReinitPacket();
 
+  // 相对距离订阅器
+  ros::Subscriber relative_distance_sub_;
+
  private:
   // Helpers to subscribe to relevant input image topics
   void subscribeMono(const size_t& kMaxImagesQueueSize);
@@ -98,6 +101,9 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
 
   // External odometry callback
   void callbackExternalOdom(const nav_msgs::Odometry::ConstPtr& odom_msg);
+
+  // 相对距离回调
+  void callbackRelativeDistance(const std_msgs::Float64::ConstPtr& distance_msg);
 
   // Reinitialization callback
   void callbackReinit(const std_msgs::Bool::ConstPtr& reinitFlag);
