@@ -193,6 +193,14 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
   } else {
     LOG(INFO) << "RosOnlineDataProvider running in sequential mode.";
   }
+
+  // 订阅相对距离话题
+  static constexpr size_t kMaxRelativeDistanceQueueSize = 1000u;
+  relative_distance_sub_ = nh_private_.subscribe(
+      "relative_distance", 
+      kMaxRelativeDistanceQueueSize,
+      &RosOnlineDataProvider::callbackRelativeDistance,
+      this);
 }
 
 RosOnlineDataProvider::~RosOnlineDataProvider() {
@@ -470,6 +478,15 @@ void RosOnlineDataProvider::publishStaticTf(const gtsam::Pose3& pose,
   static_transform_stamped.child_frame_id = child_frame_id;
   utils::gtsamPoseToRosTf(pose, &static_transform_stamped.transform);
   static_broadcaster.sendTransform(static_transform_stamped);
+}
+
+void RosOnlineDataProvider::callbackRelativeDistance(
+    const std_msgs::Float64::ConstPtr& distance_msg) {
+  const Timestamp& timestamp = ros::Time::now().toNSec();
+  if (relative_distance_callback_) {
+    relative_distance_callback_(RelativeDistanceMeasurement(
+        timestamp, distance_msg->data, 1.0));
+  }
 }
 
 }  // namespace VIO
