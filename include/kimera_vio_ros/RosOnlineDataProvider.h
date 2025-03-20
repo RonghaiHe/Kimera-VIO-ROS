@@ -73,6 +73,8 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
 
   // 相对距离订阅器
   ros::Subscriber relative_distance_sub_;
+  std::function<void(const RelativeDistanceMeasurement&)> relative_distance_callback_;
+  Timestamp last_relative_distance_timestamp_;
 
  private:
   // Helpers to subscribe to relevant input image topics
