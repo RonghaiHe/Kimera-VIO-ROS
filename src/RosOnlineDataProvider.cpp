@@ -481,11 +481,37 @@ void RosOnlineDataProvider::publishStaticTf(const gtsam::Pose3& pose,
 }
 
 void RosOnlineDataProvider::callbackRelativeDistance(
-    const std_msgs::Float64::ConstPtr& distance_msg) {
-  const Timestamp& timestamp = ros::Time::now().toNSec();
-  if (relative_distance_callback_) {
-    relative_distance_callback_(RelativeDistanceMeasurement(
-        timestamp, distance_msg->data, 1.0));
+    const std_msgs::Float64::ConstPtr& msg) {
+  try {
+    // 检查时间戳顺序
+    Timestamp current_timestamp = msg->header.stamp.toNSec();
+    if (current_timestamp < last_relative_distance_timestamp_) {
+      LOG(WARNING) << "Received out-of-order relative distance measurement. "
+                   << "Current: " << current_timestamp 
+                   << ", Last: " << last_relative_distance_timestamp_;
+      return;
+    }
+    last_relative_distance_timestamp_ = current_timestamp;
+
+    // 检查数据有效性
+    if (msg->data < 0.0) {
+      LOG(WARNING) << "Received negative relative distance: " << msg->data;
+      return;
+    }
+
+    // 创建相对距离测量
+    RelativeDistanceMeasurement relative_distance;
+    relative_distance.timestamp_ = current_timestamp;
+    relative_distance.distance_ = msg->data;
+
+    // 调用回调函数
+    if (relative_distance_callback_) {
+      relative_distance_callback_(relative_distance);
+    } else {
+      LOG(WARNING) << "Relative distance callback not registered";
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Error processing relative distance: " << e.what();
   }
 }
 
