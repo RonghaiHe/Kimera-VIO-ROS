@@ -53,7 +53,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -104,7 +104,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -155,7 +155,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -229,7 +229,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -280,7 +280,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -331,7 +331,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -407,7 +407,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -458,7 +458,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -509,7 +509,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -583,7 +583,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -634,7 +634,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -685,7 +685,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -761,7 +761,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -812,7 +812,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -863,7 +863,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -937,7 +937,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#ff0000</custom_color>
+                                <custocolor_pose>#ff0000</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -988,7 +988,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55ff00</custom_color>
+                                <custocolor_pose>#55ff00</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
@@ -1039,7 +1039,7 @@
                                 </y_axis>
                             </axes>
                             <color>
-                                <custom_color>#55aaff</custom_color>
+                                <custocolor_pose>#55aaff</custocolor_pose>
                                 <type>1</type>
                             </color>
                             <data>
