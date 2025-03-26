@@ -34,7 +34,7 @@ void Eigen2Point(const Eigen::Vector3d& v, geometry_msgs::Point& p) {
 }
 
 CameraPoseVisualization::CameraPoseVisualization()
-    : camera_scale_(0.2), camera_line_width_(0.01) {
+    : camera_scale_(0.2), camera_line_width_(0.1) {
   image_boundary_color_.r = 1.0;
   image_boundary_color_.g = 0.0;
   image_boundary_color_.b = 0.0;
