@@ -17,6 +17,28 @@ if(NOT TARGET Boost::boost)
   INTERFACE_INCLUDE_DIRECTORIES "${Boost_INCLUDE_DIRS}")
 endif()
 
+find_package(catkin REQUIRED COMPONENTS
+  roscpp
+  rosbag
+  std_msgs
+  sensor_msgs
+  nav_msgs
+  message_filters
+  cv_bridge
+  image_transport
+  tf
+  tf_conversions
+  pcl_ros
+  pcl_conversions
+  eigen_conversions
+  glog_catkin
+  gflags_catkin
+  roslint
+  kimera_msgs
+  swarmcomm_msgs
+  pose_graph_tools
+)
+
 catkin_simple()
 
 cs_add_library(${PROJECT_NAME}
