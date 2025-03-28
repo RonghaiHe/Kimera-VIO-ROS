@@ -14,6 +14,8 @@
 #include <ros/callback_queue.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
+#include <sensor_msgs/TimeReference.h>
+#include <swarmcomm_msgs/remote_uwb_info.h>
 
 #include "kimera_vio_ros/RosDataProviderInterface.h"
 #include "kimera-vio/frontend/StereoImuSyncPacket.h"
@@ -71,10 +73,22 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
   bool reinit_flag_ = false;
   ReinitPacket reinit_packet_ = ReinitPacket();
 
-  // 相对距离订阅器
+  // UWB time reference
+  sensor_msgs::TimeReference uwb_time_ref_;
+  ros::Subscriber uwb_time_ref_sub_;
+  
+  // relative distance-related
   ros::Subscriber relative_distance_sub_;
   std::function<void(const RelativeDistanceMeasurement&)> relative_distance_callback_;
   Timestamp last_relative_distance_timestamp_;
+  
+  // time conversion function
+  ros::Time LPS2ROSTIME(const int32_t& lps_time);
+  int32_t ROSTIME2LPS(const ros::Time& ros_time);
+  
+  // callback function
+  void uwbTimeRefCallback(const sensor_msgs::TimeReference::ConstPtr& ref);
+  void callbackRelativeDistance(const swarmcomm_msgs::remote_uwb_info::ConstPtr& msg);
 
  private:
   // Helpers to subscribe to relevant input image topics
@@ -103,9 +117,6 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
 
   // External odometry callback
   void callbackExternalOdom(const nav_msgs::Odometry::ConstPtr& odom_msg);
-
-  // 相对距离回调
-  void callbackRelativeDistance(const std_msgs::Float64::ConstPtr& distance_msg);
 
   // Reinitialization callback
   void callbackReinit(const std_msgs::Bool::ConstPtr& reinitFlag);
