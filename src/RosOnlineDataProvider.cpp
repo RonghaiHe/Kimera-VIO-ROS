@@ -36,7 +36,8 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
       imu_queue_(),
       imu_async_spinner_(nullptr),
       async_spinner_(nullptr),
-      uwb_time_ref_sub_() {
+      uwb_time_ref_sub_(),
+      last_relative_distance_timestamp_(0) {
   // Wait until time is non-zero and valid: this is because at the ctor level
   // we will be querying for gt pose and/or camera info.
   while (ros::ok() && !ros::Time::now().isValid()) {
@@ -195,15 +196,7 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
     LOG(INFO) << "RosOnlineDataProvider running in sequential mode.";
   }
 
-  // subscribe relative distance topic
-  static constexpr size_t kMaxRelativeDistanceQueueSize = 1000u;
-  relative_distance_sub_ = nh_private_.subscribe(
-      "relative_distance", 
-      kMaxRelativeDistanceQueueSize,
-      &RosOnlineDataProvider::callbackRelativeDistance,
-      this);
-
-  // subscribe UWB time reference topic
+  // 订阅UWB时间参考
   static constexpr size_t kMaxUwbTimeRefQueueSize = 10u;
   uwb_time_ref_sub_ = nh_.subscribe(
       "/uwb_node/time_ref",
@@ -211,7 +204,7 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
       &RosOnlineDataProvider::uwbTimeRefCallback,
       this);
 
-  // subscribe UWB relative distance topic
+  // 订阅UWB相对距离信息
   static constexpr size_t kMaxRelativeDistanceQueueSize = 1000u;
   relative_distance_sub_ = nh_.subscribe(
       "/uwb_node/remote_nodes",
@@ -519,11 +512,11 @@ void RosOnlineDataProvider::uwbTimeRefCallback(const sensor_msgs::TimeReference:
 void RosOnlineDataProvider::callbackRelativeDistance(
     const swarmcomm_msgs::remote_uwb_info::ConstPtr& msg) {
   try {
-    // convert timestamp
+    // 转换时间戳
     ros::Time ros_time = LPS2ROSTIME(msg->sys_time);
     Timestamp current_timestamp = ros_time.toNSec();
 
-    // check timestamp order
+    // 检查时间戳顺序
     if (current_timestamp < last_relative_distance_timestamp_) {
       LOG(WARNING) << "Received out-of-order relative distance measurement. "
                    << "Current: " << current_timestamp 
@@ -532,24 +525,25 @@ void RosOnlineDataProvider::callbackRelativeDistance(
     }
     last_relative_distance_timestamp_ = current_timestamp;
 
-    // process each remote node's distance information
+    // 处理每个远程节点的距离信息
     for (size_t i = 0; i < msg->node_ids.size(); ++i) {
       if (!msg->active[i]) continue;
 
-      // check data validity
+      // 检查数据有效性
       if (msg->node_dis[i] < 0.0) {
         LOG(WARNING) << "Invalid negative relative distance from node " 
                      << msg->node_ids[i] << ": " << msg->node_dis[i];
         continue;
       }
 
-      // create relative distance measurement 
+      // 创建相对距离测量
       RelativeDistanceMeasurement relative_distance;
       relative_distance.timestamp_ = current_timestamp;
       relative_distance.distance_ = msg->node_dis[i];
       relative_distance.node_id_ = msg->node_ids[i];
+      relative_distance.confidence_ = 1.0; // 设置默认置信度
 
-      // call callback function
+      // 调用回调函数
       if (relative_distance_callback_) {
         relative_distance_callback_(relative_distance);
       } else {
