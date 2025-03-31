@@ -35,7 +35,9 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
       reinit_pose_subscriber_(),
       imu_queue_(),
       imu_async_spinner_(nullptr),
-      async_spinner_(nullptr) {
+      async_spinner_(nullptr),
+      uwb_time_ref_sub_(),
+      last_relative_distance_timestamp_(0) {
   // Wait until time is non-zero and valid: this is because at the ctor level
   // we will be querying for gt pose and/or camera info.
   while (ros::ok() && !ros::Time::now().isValid()) {
@@ -193,6 +195,22 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
   } else {
     LOG(INFO) << "RosOnlineDataProvider running in sequential mode.";
   }
+
+  // 订阅UWB时间参考
+  static constexpr size_t kMaxUwbTimeRefQueueSize = 10u;
+  uwb_time_ref_sub_ = nh_.subscribe(
+      "/uwb_node/time_ref",
+      kMaxUwbTimeRefQueueSize,
+      &RosOnlineDataProvider::uwbTimeRefCallback,
+      this);
+
+  // 订阅UWB相对距离信息
+  static constexpr size_t kMaxRelativeDistanceQueueSize = 1000u;
+  relative_distance_sub_ = nh_.subscribe(
+      "/uwb_node/remote_nodes",
+      kMaxRelativeDistanceQueueSize,
+      &RosOnlineDataProvider::callbackRelativeDistance,
+      this);
 }
 
 RosOnlineDataProvider::~RosOnlineDataProvider() {
@@ -470,6 +488,71 @@ void RosOnlineDataProvider::publishStaticTf(const gtsam::Pose3& pose,
   static_transform_stamped.child_frame_id = child_frame_id;
   utils::gtsamPoseToRosTf(pose, &static_transform_stamped.transform);
   static_broadcaster.sendTransform(static_transform_stamped);
+}
+
+// time conversion function
+ros::Time RosOnlineDataProvider::LPS2ROSTIME(const int32_t& lps_time) {
+  ros::Time base = uwb_time_ref_.header.stamp - ros::Duration(uwb_time_ref_.time_ref.toSec());
+  return base + ros::Duration(lps_time / 1000.0);
+}
+
+int32_t RosOnlineDataProvider::ROSTIME2LPS(const ros::Time& ros_time) {
+  double lps_t_s = (ros_time - uwb_time_ref_.header.stamp).toSec() + uwb_time_ref_.time_ref.toSec();
+  return static_cast<int32_t>(lps_t_s * 1000);
+}
+
+// UWB time reference callback
+void RosOnlineDataProvider::uwbTimeRefCallback(const sensor_msgs::TimeReference::ConstPtr& ref) {
+  uwb_time_ref_ = *ref;
+  LOG(INFO) << "Updated UWB time reference - ROS time: " << ref->header.stamp.toSec() 
+            << ", UWB ref time: " << ref->time_ref.toSec();
+}
+
+// relative distance callback
+void RosOnlineDataProvider::callbackRelativeDistance(
+    const swarmcomm_msgs::remote_uwb_info::ConstPtr& msg) {
+  try {
+    // 转换时间戳
+    ros::Time ros_time = LPS2ROSTIME(msg->sys_time);
+    Timestamp current_timestamp = ros_time.toNSec();
+
+    // 检查时间戳顺序
+    if (current_timestamp < last_relative_distance_timestamp_) {
+      LOG(WARNING) << "Received out-of-order relative distance measurement. "
+                   << "Current: " << current_timestamp 
+                   << ", Last: " << last_relative_distance_timestamp_;
+      return;
+    }
+    last_relative_distance_timestamp_ = current_timestamp;
+
+    // 处理每个远程节点的距离信息
+    for (size_t i = 0; i < msg->node_ids.size(); ++i) {
+      if (!msg->active[i]) continue;
+
+      // 检查数据有效性
+      if (msg->node_dis[i] < 0.0) {
+        LOG(WARNING) << "Invalid negative relative distance from node " 
+                     << msg->node_ids[i] << ": " << msg->node_dis[i];
+        continue;
+      }
+
+      // 创建相对距离测量
+      RelativeDistanceMeasurement relative_distance;
+      relative_distance.timestamp_ = current_timestamp;
+      relative_distance.distance_ = msg->node_dis[i];
+      relative_distance.node_id_ = msg->node_ids[i];
+      relative_distance.confidence_ = 1.0; // 设置默认置信度
+
+      // 调用回调函数
+      if (relative_distance_callback_) {
+        relative_distance_callback_(relative_distance);
+      } else {
+        LOG(WARNING) << "Relative distance callback not registered";
+      }
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Error processing relative distance: " << e.what();
+  }
 }
 
 }  // namespace VIO

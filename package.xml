@@ -37,5 +37,9 @@
   <depend>pcl_msgs</depend>
   <depend>pcl_conversions</depend>
 
+  <depend>kimera_msgs</depend>
+  <depend>swarmcomm_msgs</depend>
+  <depend>pose_graph_tools</depend>
+
   <test_depend>rosunit</test_depend>
 </package>

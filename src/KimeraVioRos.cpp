@@ -307,6 +307,13 @@ void KimeraVioRos::connectVIO() {
                 std::ref(*CHECK_NOTNULL(vio_pipeline_.get())),
                 std::placeholders::_1));
 
+  // 注册相对距离回调
+  data_provider_->registerRelativeDistanceCallback(
+      std::bind(&VIO::Pipeline::fillRelativeDistanceQueue,
+                std::ref(*CHECK_NOTNULL(vio_pipeline_.get())),
+                std::placeholders::_1));
+  LOG(INFO) << "Registered relative distance callback";
+
   if (vio_params_->frontend_type_ == VIO::FrontendType::kStereoImu) {
     auto stereo_pipeline =
         dynamic_cast<StereoImuPipeline*>(vio_pipeline_.get());
