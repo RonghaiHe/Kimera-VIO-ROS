@@ -33,6 +33,18 @@
 #include "kimera_vio_ros/utils/UtilsRos.h"
 
 DECLARE_int32(viz_type);
+DEFINE_double(camera_pose_r,
+              1.0,
+              "Red component for camera pose visualization");
+DEFINE_double(camera_pose_g,
+              0.0,
+              "Green component for camera pose visualization");
+DEFINE_double(camera_pose_b,
+              0.0,
+              "Blue component for camera pose visualization");
+DEFINE_double(camera_pose_a,
+              1.0,
+              "Alpha component for camera pose visualization");
 
 namespace VIO {
 
@@ -539,11 +551,15 @@ void RosVisualizer::publishCameraPoses(
   const gtsam::Pose3& pose = output->W_State_Blkf_.pose_;
 
   // Create a camera pose visualization object
-  CameraPoseVisualization camera_viz;
+  CameraPoseVisualization camera_viz(
+      Eigen::Vector3d(
+          FLAGS_camera_pose_r, FLAGS_camera_pose_g, FLAGS_camera_pose_b),
+      FLAGS_camera_pose_a);
   camera_viz.setScale(0.5);
 
   // Set color for the camera frustum (red)
-  Eigen::Vector3d color(1.0, 0.0, 0.0);
+  Eigen::Vector3d color(
+      FLAGS_camera_pose_r, FLAGS_camera_pose_g, FLAGS_camera_pose_b);
 
   // Get position and orientation from the pose
   Eigen::Vector3d position(pose.x(), pose.y(), pose.z());
