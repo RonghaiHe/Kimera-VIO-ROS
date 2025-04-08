@@ -19,6 +19,7 @@
 #include <rosbag/view.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
+#include <nlink_parser/LinktrackNodeframe2.h>
 
 #include <kimera-vio/pipeline/Pipeline-definitions.h>
 #include "kimera_vio_ros/RosDataProviderInterface.h"
@@ -40,6 +41,11 @@ struct RosbagData {
   std::vector<nav_msgs::OdometryConstPtr> gt_odometry_;
   /// External odometry (only if available)
   std::vector<nav_msgs::OdometryConstPtr> external_odom_;
+
+  //TODO: uwb msg 
+  std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_msgs_;
+  std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb1_msgs_;
+  std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb2_msgs_;
 };
 
 class RosbagDataProvider : public RosDataProviderInterface {
@@ -70,6 +76,8 @@ class RosbagDataProvider : public RosDataProviderInterface {
   void sendImuDataToVio();
 
   void sendExternalOdometryToVio();
+
+  void sendUWBFrames();
 
   // Get ground-truth nav state for VIO initialization.
   // It uses odometry messages inside of the rosbag as ground-truth (indexed
@@ -103,6 +111,7 @@ class RosbagDataProvider : public RosDataProviderInterface {
   std::string imu_topic_;
   std::string gt_odom_topic_;
   std::string external_odom_topic_;
+  std::string uwb_topic_;
 
   ros::Publisher clock_pub_;
   ros::Publisher imu_pub_;
@@ -110,6 +119,8 @@ class RosbagDataProvider : public RosDataProviderInterface {
   ros::Publisher right_img_pub_;
   ros::Publisher gt_odometry_pub_;
   ros::Publisher external_odometry_pub_;
+
+  ros::Publisher uwb_pub_;
 
   Timestamp timestamp_last_frame_;
   Timestamp timestamp_last_kf_;

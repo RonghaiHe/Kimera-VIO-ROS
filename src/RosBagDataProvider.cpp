@@ -15,6 +15,8 @@
 
 #include "kimera_vio_ros/utils/UtilsRos.h"
 
+#include <pose_graph_tools_msgs/UWBFrame.h>
+
 namespace VIO {
 
 RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
@@ -26,12 +28,14 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
       imu_topic_(""),
       gt_odom_topic_(""),
       external_odom_topic_(""),
+      uwb_topic_(""),
       clock_pub_(),
       imu_pub_(),
       left_img_pub_(),
       right_img_pub_(),
       gt_odometry_pub_(),
       external_odometry_pub_(),
+      uwb_pub_(),
       timestamp_last_frame_(std::numeric_limits<Timestamp>::min()),
       timestamp_last_kf_(std::numeric_limits<Timestamp>::min()),
       timestamp_last_imu_(std::numeric_limits<Timestamp>::min()),
@@ -57,6 +61,9 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   CHECK(nh_private_.getParam("use_external_odom", use_external_odom_));
   CHECK(nh_private_.getParam("external_odometry_rosbag_topic",
                              external_odom_topic_));
+
+  // TODO: UWB topic in params
+  CHECK(nh_private_.getParam("uwb_rosbag_topic", uwb_topic_));
 
   LOG(INFO) << "Constructing RosbagDataProvider from path: \n"
             << " - Rosbag Path: " << rosbag_path_.c_str() << '\n'
@@ -90,6 +97,10 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   if (!gt_odom_topic_.empty()) {
     gt_odometry_pub_ =
         nh_.advertise<nav_msgs::Odometry>(gt_odom_topic_, kQueueSize);
+  }
+
+  if (!uwb_topic_.empty()) {
+    uwb_pub_ = nh_.advertise<pose_graph_tools_msgs::UWBFrame>(uwb_topic_, kQueueSize);
   }
 
   if (use_external_odom_) {
@@ -147,6 +158,26 @@ void RosbagDataProvider::sendExternalOdometryToVio() {
     external_odom_callback_(ExternalOdomMeasurement(
         timestamp, gtsam::NavState(kimera_odom.pose_, kimera_odom.velocity_)));
   }
+}
+
+// 与sendImuDataToVio紧邻执行
+void RosbagDataProvider::sendUWBFrames() {
+  // 检查3个uwb消息，并根据时间匹配，若s部分相同且ns部分前2位相同，则认为是同一帧
+  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb0_map;
+  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb1_map;
+  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb2_map;
+  // 取ns 前2位有效数字插入uwb0_map
+  for (const auto& uwb_msg : rosbag_data_.uwb0_msgs_) {
+    const auto& stamp = uwb_msg->stamp;
+  }
+
+  // uwb1 时间变换，若时间在uwb0map中则加入 uwb1map
+  // uwb2 时间变换， 若在uwb0map中则加入uwb2map
+
+  // 按时间遍历 uwb0_i uwb1_i uwb2_i
+    // 本机uwb序号 config_id * 3 + 0,1,2 判断是否有效性
+
+  // 按pose_graph_tools_msg::UWBFrames 从 uwb_pub_发布
 }
 
 bool RosbagDataProvider::spin() {
@@ -309,6 +340,10 @@ bool RosbagDataProvider::parseRosbag(const std::string& bag_path,
   if (use_external_odom_) {
     topics.push_back(external_odom_topic_);
   }
+  topics.push_back(uwb_topic_ + "/0");
+  topics.push_back(uwb_topic_ + "/1");
+  topics.push_back(uwb_topic_ + "/2");
+
 
   std::stringstream ss;
   ss << "query topics:" << std::endl;
@@ -402,6 +437,28 @@ bool RosbagDataProvider::parseRosbag(const std::string& bag_path,
       LOG(ERROR) << "Could not find the type of this rosbag msg from topic:\n"
                  << msg_topic;
     }
+
+    // 检查是否为0号UWB消息
+    nlink_parser::LinktrackNodeframe2ConstPtr uwb_msg =
+        msg.instantiate<nlink_parser::LinktrackNodeframe2>();
+    if (uwb_msg != nullptr) {
+      if (msg_topic == uwb_topic_ + "/0") {
+        rosbag_data->uwb0_msgs_.push_back(uwb_msg);
+      } else if (msg_topic == uwb_topic_ + "/1") {
+        rosbag_data->uwb1_msgs_.push_back(uwb_msg);
+      } else if (msg_topic == uwb_topic_ + "/2") {
+        rosbag_data->uwb2_msgs_.push_back(uwb_msg);
+      } else {
+        LOG(ERROR) << "Unrecognized topic name for UWB msg. We were"
+                      " expecting ground-truth odometry on this topic: "
+                   << msg_topic;
+      }
+    } else {
+      LOG(ERROR) << "Could not find the type of this rosbag msg from topic:\n"
+                 << msg_topic;
+    }
+
+
   }
   bag.close();
 
