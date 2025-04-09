@@ -82,6 +82,9 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
    requested to do ground-truth initialization. -->
   <arg name="external_odom_topic"               default=""/>
 
+  <arg name="uwb_topic" default="uwb_distance"/>
+  <arg name="dis_topic" default="kimera_vio_ros_node/Dis"/>
+
   <!-- Frame IDs -->
   <arg name="odom_frame_id"      default="odom"/>
   <arg name="base_link_frame_id" default="base_link"/>
@@ -196,6 +199,8 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
     <param name="left_cam_rosbag_topic"  value="$(arg left_cam_topic)"  unless="$(arg online)"/>
     <param name="right_cam_rosbag_topic" value="$(arg right_cam_topic)" unless="$(arg online)"/>
     <param name="depth_cam_rosbag_topic" value="$(arg depth_cam_topic)" unless="$(arg online)"/>
+    <param name="uwb_rosbag_topic" value="$(arg uwb_topic)" unless="$(arg online)"/>
+    <param name="dis_topic" value="$(arg dis_topic)" if="$(arg use_uwb)"/>
     <param name="imu_rosbag_topic"       value="$(arg imu_topic)"       unless="$(arg online)"/>
     <param name="ground_truth_odometry_rosbag_topic"
            value="$(arg gt_topic)"                   unless="$(arg online)"/>

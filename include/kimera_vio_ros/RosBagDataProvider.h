@@ -45,8 +45,6 @@ struct RosbagData {
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_msgs_;
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb1_msgs_;
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb2_msgs_;
-
-
 };
 
 class RosbagDataProvider : public RosDataProviderInterface {
@@ -113,6 +111,7 @@ class RosbagDataProvider : public RosDataProviderInterface {
   std::string gt_odom_topic_;
   std::string external_odom_topic_;
   std::string uwb_topic_;
+  std::string dis_topic_;
 
   ros::Publisher clock_pub_;
   ros::Publisher imu_pub_;
@@ -141,7 +140,7 @@ class RosbagDataProvider : public RosDataProviderInterface {
 
   bool use_uwb_;
   size_t num_robots_;
-  uint16_t robot_id;
+  uint16_t robot_id_;
 
   // parameters
   std::vector<std::vector<double>> t_uwb_body_;
