@@ -44,6 +44,8 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
       k_last_gt_(0u),
       k_last_odom_(0u),
       use_external_odom_(false),
+      num_robots_(3),
+      robot_id(0),
       use_uwb_(false) {
   CHECK(nh_private_.getParam("rosbag_path", rosbag_path_));
   CHECK(nh_private_.getParam("left_cam_rosbag_topic", left_imgs_topic_));
@@ -63,9 +65,13 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   // for Multi-robot
   CHECK(nh_private_.getParam("use_uwb", use_uwb_));
   CHECK(nh_private_.getParam("num_robots", num_robots_));
+  CHECK(nh_private_.getParam("robot_id", robot_id));
 
   // TODO: UWB topic in params
   CHECK(nh_private_.getParam("uwb_rosbag_topic", uwb_topic_));
+
+  // TODO: robot name file in rosparams
+
 
   LOG(INFO) << "Constructing RosbagDataProvider from path: \n"
             << " - Rosbag Path: " << rosbag_path_.c_str() << '\n'
@@ -83,6 +89,13 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
     CHECK(!right_imgs_topic_.empty());
   }
   CHECK(!imu_topic_.empty());
+
+  std::map<unsigned, std::string> mRobotNames;
+  for (size_t id = 0; id < num_robots_ ;id++) {
+    std::string robot_name = "kimera" + std::to_string(id);
+    ros::param::get("~robot" + std::to_string(id) + "_name", robot_name);
+    mRobotNames[id] = robot_name;
+  }
 
   // Ros publishers specific to rosbag data provider
   static constexpr size_t kQueueSize = 10u;
@@ -103,8 +116,19 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
 
   if (!uwb_topic_.empty()) {
     uwb_pub_ =
-        nh_.advertise<pose_graph_tools_msgs::UWBFrame>(uwb_topic_, kQueueSize);
+        nh_.advertise<pose_graph_tools_msgs::UWBFrame>(uwb_topic_, kQueueSize * 18);
   }
+
+  // 初始化bot
+  t_uwb_body_.resize(num_robots_, std::vector<double>(3, 0.0));
+  for (size_t id = 0; id < num_robots_; id++) {
+    for (size_t uid = 0; uid < 3; uid++) {
+      ros::param::get(mRobotNames[id] + "/kimera_vio_ros/t_body_uwb" +
+        std::to_string(uid),
+      t_uwb_body_[id][uid]);
+    }
+  }
+
 
   if (use_external_odom_) {
     use_external_odom_ = true;
@@ -166,12 +190,12 @@ void RosbagDataProvider::sendExternalOdometryToVio() {
 // 与sendImuDataToVio紧邻执行
 void RosbagDataProvider::sendUWBFrames() {
   // 检查3个uwb消息，并根据时间匹配，若s部分相同且ns部分前2位相同，则认为是同一帧
-  std::map<int64_t, std::shared_ptr<nlink_parser::LinktrackNodeframe2>>
+  std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr>
       uwb0_map, uwb1_map, uwb2_map;
   // 取ns 前2位有效数字插入uwb0_map
   for (const auto& uwb_msg : rosbag_data_.uwb0_msgs_) {
     // CHECK_EQ(msg->id, config_id * 3 + 0);
-    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
     uwb0_map[stamp] = uwb_msg;
   }
 
@@ -179,33 +203,287 @@ void RosbagDataProvider::sendUWBFrames() {
   // uwb2 时间变换， 若在uwb0map中则加入uwb2map
   for (const auto& uwb_msg : rosbag_data_.uwb1_msgs_) {
     // CHECK_EQ(msg->id, config_id * 3 + 1);
-    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
     if (uwb0_map.find(stamp) != uwb0_map.end()) {
       uwb1_map[stamp] = uwb_msg;
     }
   }
   for (const auto& uwb_msg : rosbag_data_.uwb2_msgs_) {
     // CHECK_EQ(msg->id, config_id * 3 + 2);
-    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
     if (uwb0_map.find(stamp) != uwb0_map.end()) {
       uwb2_map[stamp] = uwb_msg;
     }
   }
 
-  std::vector<std::vector<double>> uwb_distances(3);
-  for (const auto& [stamp, uwb_msg] : uwb0_map) {
-    for (const auto& node : uwb0_msg->nodes) {
-    }
-    if (uwb1_map.find(stamp) != uwb1_map.end()) {
-    }
-    if (uwb2_map.find(stamp) != uwb2_map.end()) {
-    }
+  // 时间序列遍历
+  auto it0_prev = uwb0_map.begin();
+  auto it1_prev = uwb1_map.begin();
+  auto it2_prev = uwb2_map.begin();
+  auto epsilon = 1e-4;
+  auto sigma = 0.0383 * 3;
+  auto epsilon3 = 10.0;
+
+  auto u0_pos = Point3(t_uwb_body_[robot_id][0]);
+  auto u1_pos = Point3(t_uwb_body_[robot_id][1]);
+  auto u2_pos = Point3(t_uwb_body_[robot_id][2]);
+
+  std::vector<Point3> uwb_pos(3);
+  uwb_pos[0] = u0_pos;
+  uwb_pos[1] = u1_pos;
+  uwb_pos[2] = u2_pos;
+
+  Eigen::Matrix3d gt_dis;
+  gt_dis(0, 1) = (u0_pos - u1_pos).norm();
+  gt_dis(0, 2) = (u0_pos - u2_pos).norm();
+  gt_dis(1, 0) = gt_dis(0, 1);
+  gt_dis(1, 2) = (u1_pos - u2_pos).norm();
+  gt_dis(2, 0) = gt_dis(0, 2);
+  gt_dis(2, 1) = gt_dis(1, 2);
+  gt_dis(2, 2) = 0.0;
+  gt_dis(1, 1) = 0.0;
+  gt_dis(0, 0) = 0.0;
+
+
+
+  for (auto it0 = uwb0_map.begin(); it0 != uwb0_map.end(); ++it0) {
+    auto it1 = uwb1_map.find(it0->first);
+    auto it2 = uwb2_map.find(it0->first);
+
+    // 检查当前bot 3个uwb的正确性
+    auto d01 = it0->second->nodes[ robot_id * 3 + 1].dis;
+    auto d02 = it0->second->nodes[ robot_id * 3 + 2].dis;
+    auto d10 = it1 == uwb1_map.end() ? -1 : it1->second->nodes[ robot_id * 3 + 0].dis;
+    auto d12 = it1 == uwb1_map.end() ? -1 : it1->second->nodes[ robot_id * 3 + 2].dis;
+    auto d20 = it2 == uwb2_map.end() ? -1 : it2->second->nodes[ robot_id * 3 + 0].dis;
+    auto d21 = it2 == uwb2_map.end() ? -1 : it2->second->nodes[ robot_id * 3 + 1].dis;
+
+    // auto gt01 = (u0_pos - u1_pos).norm();
+    // auto gt02 = (u0_pos - u2_pos).norm();
+    // auto gt12 = (u1_pos - u2_pos).norm();
+
+    std::vector<bool> unormal(3, false);
+
+    unormal[0] = fabs(d01 - gt_dis(0, 1)) < sigma | 
+                    fabs(d02 - gt_dis(0, 2)) < sigma;
+
+    unormal[1] = fabs(d10 - gt_dis(1,0)) < sigma |
+                    fabs(d12 - gt_dis(1, 2)) < sigma;
+
+    unormal[2] = fabs(d20 - gt_dis(2, 0)) < sigma |
+                    fabs(d21 - gt_dis(2, 1)) < sigma;
+
+    // 检查当前bot 对 dest_id的bot 的各项uwb数据
+    for (auto dest_id = 0; dest_id < num_robots_ ; dest_id++ ) {
+
+      std::vector<std::map<int, nlink_parser::LinktrackNode2ConstPtr>> effect_uwb(3);
+
+      auto & src_u0_uwbs = it0->second->nodes;
+      // 遍历目标的uwb数据
+      for (auto uid = 0; uid < 3 ; uid ++) {
+
+        auto globle_uid = dest_id * 3 + uid;
+        if (src_u0_uwbs.size() > globle_uid && src_u0_uwbs[globle_uid].dis > 0) {
+          // 若当前uwb数据不正常，则跳过
+          if (unormal[uid]) {
+            continue;
+          }
+          // 若rx-fx > epsilon3，则跳过
+          if (src_u0_uwbs[globle_uid].rx_rssi - src_u0_uwbs[globle_uid].fp_rssi > epsilon3) {
+            continue;
+          }
+          // 前向判断 若当前dis与前一帧差值小于epsilon，则认为无效
+          if (it0_prev != it0) {
+            auto & src_u0_prev_uwbs = it0_prev->second->nodes;
+            if (src_u0_prev_uwbs.size() > globle_uid && src_u0_prev_uwbs[globle_uid].dis > 0) {
+              if (fabs(src_u0_uwbs[globle_uid].dis - src_u0_prev_uwbs[globle_uid].dis) < epsilon) {
+                continue;
+              }
+            }
+          }
+
+          effect_uwb[0][uid] =
+              boost::make_shared<nlink_parser::LinktrackNode2>(
+                  &(src_u0_uwbs[globle_uid]));
+        }
+        
+        // u1 判断
+        if (it1 != uwb1_map.end()) {
+          auto & src_u1_uwbs = it1->second->nodes;
+          if (src_u1_uwbs.size() > globle_uid && src_u1_uwbs[globle_uid].dis > 0) {
+            // 若当前uwb数据不正常，则跳过
+            if (unormal[uid]) {
+              continue;
+            }
+            // 若rx-fx > epsilon3，则跳过
+            if (src_u1_uwbs[globle_uid].rx_rssi - src_u1_uwbs[globle_uid].fp_rssi > epsilon3) {
+              continue;
+            }
+            // 前向判断 若当前dis与前一帧差值小于epsilon，则认为无效
+            if (it1_prev != it1) {
+              auto & src_u1_prev_uwbs = it1_prev->second->nodes;
+              if (src_u1_prev_uwbs.size() > globle_uid && src_u1_prev_uwbs[globle_uid].dis > 0) {
+                if (fabs(src_u1_uwbs[globle_uid].dis - src_u1_prev_uwbs[globle_uid].dis) < epsilon) {
+                  continue;
+                }
+              }
+            }
+            effect_uwb[1][uid] =
+                boost::make_shared<nlink_parser::LinktrackNode2>(
+                    &(src_u1_uwbs[globle_uid]));
+          }
+        }
+
+        // u2 判断
+        if (it2 != uwb2_map.end()) {
+          auto & src_u2_uwbs = it2->second->nodes;
+          if (src_u2_uwbs.size() > globle_uid && src_u2_uwbs[globle_uid].dis > 0) {
+            // 若当前uwb数据不正常，则跳过
+            if (unormal[uid]) {
+              continue;
+            }
+            // 若rx-fx > epsilon3，则跳过
+            if (src_u2_uwbs[globle_uid].rx_rssi - src_u2_uwbs[globle_uid].fp_rssi > epsilon3) {
+              continue;
+            }
+            // 前向判断 若当前dis与前一帧差值小于epsilon，则认为无效
+            if (it2_prev != it2) {
+              auto & src_u2_prev_uwbs = it2_prev->second->nodes;
+              if (src_u2_prev_uwbs.size() > globle_uid && src_u2_prev_uwbs[globle_uid].dis > 0) {
+                if (fabs(src_u2_uwbs[globle_uid].dis - src_u2_prev_uwbs[globle_uid].dis) < epsilon) {
+                  continue;
+                }
+              }
+            }
+            effect_uwb[2][uid] =
+                boost::make_shared<nlink_parser::LinktrackNode2>(
+                    &(src_u2_uwbs[globle_uid]));
+          }
+        }
+      }
+      // 若有效数据小于6，则跳过此次
+      auto effect_size = effect_uwb[0].size() + effect_uwb[1].size() + effect_uwb[2].size();
+      if (effect_size < 6) {
+        LOG(WARNING) << "UWB data is not enough, only " << effect_size
+                      << " nodes";
+        continue;
+      }
+
+      // 三角约束 
+      std::map<std::tuple<int ,int>, int> checknum;
+      std::map<std::tuple<int ,int>, int> errornum;
+      auto check = [&](int src_id, int dest_id) {
+        if (checknum.find(std::make_tuple(src_id, dest_id)) == checknum.end()) {
+          checknum[std::make_tuple(src_id, dest_id)] = 1;
+        } else {
+          checknum[std::make_tuple(src_id, dest_id)] += 1;
+        }
+        if (errornum.find(std::make_tuple(src_id, dest_id)) == errornum.end()) {
+          errornum[std::make_tuple(src_id, dest_id)] = 0;
+        }
+      };
+
+      auto error = [&](int src_id, int dest_id) {
+        if (errornum.find(std::make_tuple(src_id, dest_id)) == errornum.end()) {
+          LOG(WARNING) << "errornum not found";
+          errornum[std::make_tuple(src_id, dest_id)] = 1;
+        }
+        else {
+          errornum[std::make_tuple(src_id, dest_id)] += 1;
+        }
+      };
+
+      // 先遍历本机 1个uwb为端点的边组
+      for (auto uid = 0; uid < 3 ; uid ++) {
+        auto & uimap = effect_uwb[uid];
+        // 找出对应边上的不重复两两组合
+        for (auto it = uimap.begin(); it != uimap.end(); ++it) {
+          for (auto it2 = std::next(it); it2 != uimap.end(); ++it2) {
+            auto uid1 = it->first;
+            auto uid2 = it2->first;
+            auto uid1_dis = it->second->dis;
+            auto uid2_dis = it2->second->dis;
+            
+            check(uid, uid1);
+            check(uid, uid2);
+
+            auto gt_u1_u2 = gt_dis(uid1, uid2);
+
+            // 如果 u1距离与u2 距离差值大于 3 * sqrt 2 * sigma + gt_u1_u2 
+            // 即认为 uid - uid1, uid-uid2 uid1-uid2 构不成三角形 异常
+            if (fabs(uid1_dis - uid2_dis) > 3 * sqrt(2) * sigma + gt_u1_u2) {
+              error(uid, uid1);
+              error(uid, uid2);
+            }
+          }
+        }
+      }
+
+      // 再遍历本机 2个uwb为端点的边组
+      for (auto it1_uid = 0; it1_uid < 3 ; it1_uid ++) {
+        for (auto it2_uid = it1_uid + 1; it2_uid < 3 ; it2_uid ++) {
+          auto & uimap1 = effect_uwb[it1_uid];
+          auto & uimap2 = effect_uwb[it2_uid];
+          // 找出对应边上的同时存在两个边的节点
+          for (auto it1 = uimap1.begin(); it1 != uimap1.end(); ++it1) {
+            auto uid1 = it1->first;
+            auto uid1_dis = it1->second->dis;
+            auto it2 = uimap2.find(uid1);
+            if (it2 != uimap2.end()) {
+              auto uid2_dis = it2->second->dis;
+
+              check(it1_uid, uid1);
+              check(it2_uid, uid1);
+
+              auto gt_u1_u2 = gt_dis(it1_uid, it2_uid);
+              // 如果 u1距离与u2 距离差值大于 3 * sqrt 2 * sigma + gt_u1_u2
+              // 即认为 uid - uid1, uid-uid2 uid1-uid2 构不成三角形 异常
+              if (fabs(uid1_dis - uid2_dis) > 3 * sqrt(2) * sigma + gt_u1_u2) {
+                error(it1_uid, uid1);
+                error(it2_uid, uid1);
+              }
+
+            }
+          }
+        }
+      }
+
+  
+
+      pose_graph_tools_msgs::UWBFrame uwb;
+      uwb.stamp = it0->second->stamp;
+      uwb.distances.assign(9, -1.0f);
+      uwb.src_robot_id = robot_id;
+      uwb.dst_robot_id = dest_id;
+      // 计算 errornum / checknum <= 0.5的边数量，若小于6则不发布
+      int valid_num = 0;
+      for ( auto &it: checknum) {
+        auto &kt = it.first;
+        auto &src_id = std::get<0>(kt);
+        auto &dest_id = std::get<1>(kt);
+        auto &check_num = it.second;
+        auto &error_num = errornum[kt];
+
+        if (error_num * 1.0 / check_num < 0.5) {
+          valid_num++;
+          uwb.distances[src_id * 3 + dest_id] = effect_uwb[src_id][dest_id]->dis;
+        }
+      }
+
+      if (valid_num < 6) {
+        LOG(WARNING) << "UWB data is not enough, only " << valid_num
+                      << " nodes";
+        continue;
+      }
+      uwb_pub_.publish(uwb);
+
+    } 
+
+    it0_prev = it0;
+    it1_prev = it1;
+    it2_prev = it2;
   }
 
-  // 按时间遍历 uwb0_i uwb1_i uwb2_i
-  // 本机uwb序号 config_id * 3 + 0,1,2 判断是否有效性
-
-  // 按pose_graph_tools_msg::UWBFrames 从 uwb_pub_发布
 }
 
 bool RosbagDataProvider::spin() {
