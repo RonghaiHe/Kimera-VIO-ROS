@@ -8,14 +8,11 @@
 #include "kimera_vio_ros/RosBagDataProvider.h"
 
 #include <glog/logging.h>
-
+#include <kimera-vio/pipeline/Pipeline-definitions.h>
+#include <pose_graph_tools_msgs/UWBFrame.h>
 #include <rosgraph_msgs/Clock.h>
 
-#include <kimera-vio/pipeline/Pipeline-definitions.h>
-
 #include "kimera_vio_ros/utils/UtilsRos.h"
-
-#include <pose_graph_tools_msgs/UWBFrame.h>
 
 namespace VIO {
 
@@ -46,7 +43,8 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
       k_last_imu_(0u),
       k_last_gt_(0u),
       k_last_odom_(0u),
-      use_external_odom_(false) {
+      use_external_odom_(false),
+      use_uwb_(false) {
   CHECK(nh_private_.getParam("rosbag_path", rosbag_path_));
   CHECK(nh_private_.getParam("left_cam_rosbag_topic", left_imgs_topic_));
   if (vio_params_.frontend_type_ == FrontendType::kStereoImu) {
@@ -61,6 +59,10 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   CHECK(nh_private_.getParam("use_external_odom", use_external_odom_));
   CHECK(nh_private_.getParam("external_odometry_rosbag_topic",
                              external_odom_topic_));
+
+  // for Multi-robot
+  CHECK(nh_private_.getParam("use_uwb", use_uwb_));
+  CHECK(nh_private_.getParam("num_robots", num_robots_));
 
   // TODO: UWB topic in params
   CHECK(nh_private_.getParam("uwb_rosbag_topic", uwb_topic_));
@@ -100,7 +102,8 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   }
 
   if (!uwb_topic_.empty()) {
-    uwb_pub_ = nh_.advertise<pose_graph_tools_msgs::UWBFrame>(uwb_topic_, kQueueSize);
+    uwb_pub_ =
+        nh_.advertise<pose_graph_tools_msgs::UWBFrame>(uwb_topic_, kQueueSize);
   }
 
   if (use_external_odom_) {
@@ -163,19 +166,44 @@ void RosbagDataProvider::sendExternalOdometryToVio() {
 // 与sendImuDataToVio紧邻执行
 void RosbagDataProvider::sendUWBFrames() {
   // 检查3个uwb消息，并根据时间匹配，若s部分相同且ns部分前2位相同，则认为是同一帧
-  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb0_map;
-  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb1_map;
-  std::map<ros::Time, std::shared_ptr<nlink_parser::LinktrackNodeframe2>> uwb2_map;
+  std::map<int64_t, std::shared_ptr<nlink_parser::LinktrackNodeframe2>>
+      uwb0_map, uwb1_map, uwb2_map;
   // 取ns 前2位有效数字插入uwb0_map
   for (const auto& uwb_msg : rosbag_data_.uwb0_msgs_) {
-    const auto& stamp = uwb_msg->stamp;
+    // CHECK_EQ(msg->id, config_id * 3 + 0);
+    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    uwb0_map[stamp] = uwb_msg;
   }
 
   // uwb1 时间变换，若时间在uwb0map中则加入 uwb1map
   // uwb2 时间变换， 若在uwb0map中则加入uwb2map
+  for (const auto& uwb_msg : rosbag_data_.uwb1_msgs_) {
+    // CHECK_EQ(msg->id, config_id * 3 + 1);
+    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    if (uwb0_map.find(stamp) != uwb0_map.end()) {
+      uwb1_map[stamp] = uwb_msg;
+    }
+  }
+  for (const auto& uwb_msg : rosbag_data_.uwb2_msgs_) {
+    // CHECK_EQ(msg->id, config_id * 3 + 2);
+    int64_t stamp = uwb_msg->stamp.secs * 100 + uwb_msg->stamp.nsecs / 1e7;
+    if (uwb0_map.find(stamp) != uwb0_map.end()) {
+      uwb2_map[stamp] = uwb_msg;
+    }
+  }
+
+  std::vector<std::vector<double>> uwb_distances(3);
+  for (const auto& [stamp, uwb_msg] : uwb0_map) {
+    for (const auto& node : uwb0_msg->nodes) {
+    }
+    if (uwb1_map.find(stamp) != uwb1_map.end()) {
+    }
+    if (uwb2_map.find(stamp) != uwb2_map.end()) {
+    }
+  }
 
   // 按时间遍历 uwb0_i uwb1_i uwb2_i
-    // 本机uwb序号 config_id * 3 + 0,1,2 判断是否有效性
+  // 本机uwb序号 config_id * 3 + 0,1,2 判断是否有效性
 
   // 按pose_graph_tools_msg::UWBFrames 从 uwb_pub_发布
 }
@@ -344,7 +372,6 @@ bool RosbagDataProvider::parseRosbag(const std::string& bag_path,
   topics.push_back(uwb_topic_ + "/1");
   topics.push_back(uwb_topic_ + "/2");
 
-
   std::stringstream ss;
   ss << "query topics:" << std::endl;
   ss << "=============" << std::endl;
@@ -457,8 +484,6 @@ bool RosbagDataProvider::parseRosbag(const std::string& bag_path,
       LOG(ERROR) << "Could not find the type of this rosbag msg from topic:\n"
                  << msg_topic;
     }
-
-
   }
   bag.close();
 
