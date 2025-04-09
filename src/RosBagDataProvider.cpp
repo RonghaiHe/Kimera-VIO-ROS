@@ -123,7 +123,7 @@ RosbagDataProvider::RosbagDataProvider(const VioParams& vio_params)
   t_uwb_body_.resize(num_robots_, std::vector<double>(3, 0.0));
   for (size_t id = 0; id < num_robots_; id++) {
     for (size_t uid = 0; uid < 3; uid++) {
-      ros::param::get(mRobotNames[id] + "/kimera_vio_ros/t_body_uwb" +
+      ros::param::get("~t_body_uwb" +
         std::to_string(uid),
       t_uwb_body_[id][uid]);
     }
