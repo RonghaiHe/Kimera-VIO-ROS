@@ -205,9 +205,9 @@ bool KimeraVioRos::spin() {
     ros::WallRate rate(20);  // 20 Hz
     while (ros::ok() && !restart_vio_pipeline_) {
       const auto stats = vio_pipeline_->printStatistics();
-      if (!stats.empty()) {
-        LOG_EVERY_N(INFO, 20) << stats;
-      }
+      // if (!stats.empty()) {
+      //   LOG_EVERY_N(INFO, 20) << stats;
+      // }
 
       rate.sleep();
 

@@ -5,6 +5,8 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
   <arg name="robot_id" default="0"/>
   <!-- Whether or not there are other robots being run -->
   <arg name="multirobot" default="false"/>
+  <arg name="num_robots" default="3"/>
+  <arg name="use_uwb" default="true"/>
   <!-- Dataset name (used to load params) -->
   <arg name="dataset_name" default=""/>
   <!-- If False, parses the given rosbag, otw it plays the rosbage -->
@@ -149,6 +151,9 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
     <param name="image_transport" value="$(arg rgb_image_transport)"/>
     <param name="params_folder_path"    value="$(arg params_folder)"/>
     <param name="sensor_params_folder_path" value="$(arg sensor_folder)"/>
+
+    <param name="num_robots" value="$(arg num_robots)"/>
+    <param name="use_uwb" value="$(arg use_uwb)"/>
 
     <param name="online_run"            value="$(arg online)"/>
     <param name="use_lcd"               value="$(arg use_lcd)"/>

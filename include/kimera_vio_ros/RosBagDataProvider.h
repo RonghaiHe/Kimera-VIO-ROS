@@ -7,21 +7,20 @@
 
 #pragma once
 
-#include <functional>
-#include <string>
-
-#include <opencv2/opencv.hpp>
-
+#include <kimera-vio/pipeline/Pipeline-definitions.h>
 #include <nav_msgs/Odometry.h>
+#include <nlink_parser/LinktrackNodeframe2.h>
 #include <ros/console.h>
 #include <ros/ros.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
-#include <nlink_parser/LinktrackNodeframe2.h>
 
-#include <kimera-vio/pipeline/Pipeline-definitions.h>
+#include <functional>
+#include <opencv2/opencv.hpp>
+#include <string>
+
 #include "kimera_vio_ros/RosDataProviderInterface.h"
 
 namespace VIO {
@@ -42,7 +41,7 @@ struct RosbagData {
   /// External odometry (only if available)
   std::vector<nav_msgs::OdometryConstPtr> external_odom_;
 
-  //TODO: uwb msg 
+  // TODO: uwb msg
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_msgs_;
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb1_msgs_;
   std::vector<nlink_parser::LinktrackNodeframe2ConstPtr> uwb2_msgs_;
@@ -137,6 +136,15 @@ class RosbagDataProvider : public RosDataProviderInterface {
   size_t k_last_odom_;
 
   bool use_external_odom_;
+
+  bool use_uwb_;
+
+  // parameters
+  std::vector<std::vector<double>> t_uwb_body_;
+
+  std::vector<double> uwb0_last_data_;
+  std::vector<double> uwb1_last_data_;
+  std::vector<double> uwb2_last_data_;
 };
 
 }  // namespace VIO
