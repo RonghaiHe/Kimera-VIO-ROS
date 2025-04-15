@@ -5,8 +5,8 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
   <arg name="robot_id" default="0"/>
   <!-- Whether or not there are other robots being run -->
   <arg name="multirobot" default="false"/>
-  <arg name="num_robots" default="3"/>
-  <arg name="use_uwb" default="true"/>
+  <arg name="num_robots" default="1"/>
+  <arg name="use_uwb" default="false"/>
   <!-- Dataset name (used to load params) -->
   <arg name="dataset_name" default=""/>
   <!-- If False, parses the given rosbag, otw it plays the rosbage -->
@@ -83,7 +83,7 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
   <arg name="external_odom_topic"               default=""/>
 
   <arg name="uwb_topic" default="uwb_distance"/>
-  <arg name="dis_topic" default="kimera_vio_ros_node/Dis"/>
+  <arg name="dis_topic" default="kimera_vio_ros_node/dis"/>
 
   <!-- Frame IDs -->
   <arg name="odom_frame_id"      default="odom"/>
@@ -200,6 +200,7 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
     <param name="right_cam_rosbag_topic" value="$(arg right_cam_topic)" unless="$(arg online)"/>
     <param name="depth_cam_rosbag_topic" value="$(arg depth_cam_topic)" unless="$(arg online)"/>
     <param name="uwb_rosbag_topic" value="$(arg uwb_topic)" unless="$(arg online)"/>
+    <param name="uwb_topic" value="$(arg uwb_topic)" if="$(arg online)"/>
     <param name="dis_topic" value="$(arg dis_topic)" if="$(arg use_uwb)"/>
     <param name="imu_rosbag_topic"       value="$(arg imu_topic)"       unless="$(arg online)"/>
     <param name="ground_truth_odometry_rosbag_topic"
@@ -237,6 +238,9 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
     <!-- TODO(nathan) consider not linking directly to arg -->
     <!-- Enable external processes to ask for a registration between two frames -->
     <param name="use_lcd_registration_server" value="$(arg lcd_no_detection)"/>
+
+     <!-- Load UWB to body -->
+     <rosparam command="load" file="$(find kimera_vio_ros)/params/t_body_uwb.yaml"/>
 
     <!-- Load calibration -->
     <!-- <rosparam command="load" file="$(arg params_folder)/calibration.yaml"/> -->

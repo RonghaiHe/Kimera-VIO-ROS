@@ -11,12 +11,14 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/time_synchronizer.h>
 #include <nav_msgs/Odometry.h>
+#include <nlink_parser/LinktrackNodeframe2.h>
+#include <pose_graph_tools_msgs/UWBFrame.h>
 #include <ros/callback_queue.h>
 #include <sensor_msgs/Imu.h>
 #include <std_msgs/Bool.h>
 
-#include "kimera_vio_ros/RosDataProviderInterface.h"
 #include "kimera-vio/frontend/StereoImuSyncPacket.h"
+#include "kimera_vio_ros/RosDataProviderInterface.h"
 
 namespace VIO {
 
@@ -79,6 +81,9 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
 
   void subscribeRgbd(const size_t& kMaxImagesQueueSize);
 
+  // Helper to subscribe to UWB topics
+  void subscribeUWB();
+
   // Mono image callback
   void callbackMonoImage(const sensor_msgs::ImageConstPtr& img_msg);
 
@@ -98,6 +103,14 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
 
   // External odometry callback
   void callbackExternalOdom(const nav_msgs::Odometry::ConstPtr& odom_msg);
+
+  // UWB callbacks
+  void callbackUWB0(const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg);
+  void callbackUWB1(const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg);
+  void callbackUWB2(const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg);
+
+  // Process and publish UWB frames
+  void processUWBFrames();
 
   // Reinitialization callback
   void callbackReinit(const std_msgs::Bool::ConstPtr& reinitFlag);
@@ -136,6 +149,12 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
   // Define subscriber for external odom
   ros::Subscriber external_odom_subscriber_;
 
+  // Define subscribers for UWB data
+  ros::Subscriber uwb0_subscriber_;
+  ros::Subscriber uwb1_subscriber_;
+  ros::Subscriber uwb2_subscriber_;
+  ros::Publisher uwb_pub_;
+
   // Define subscriber for Reinit data
   ros::Subscriber reinit_flag_subscriber_;
   ros::Subscriber reinit_pose_subscriber_;
@@ -151,11 +170,32 @@ class RosOnlineDataProvider : public RosDataProviderInterface {
   bool started_async_spinners_ = false;
 
   bool use_external_odom_ = false;
+  bool use_uwb_ = false;
+
+  // UWB-related members
+  size_t num_robots_;
+  uint16_t robot_id_;
+  std::string uwb_topic_;
+  std::string dis_topic_;
+  std::vector<std::vector<double>> t_uwb_body_;
+  std::vector<std::vector<double>> last_dis_;
+
+  // Maps for UWB message storage
+  std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_map_;
+  std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr> uwb1_map_;
+  std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr> uwb2_map_;
+
+  // Timer for UWB processing
+  ros::Timer uwb_process_timer_;
 
   // Frame ids
   std::string base_link_frame_id_;
   std::string left_cam_frame_id_;
   std::string right_cam_frame_id_;
+
+  std::mutex uwb0_mutex_;
+  std::mutex uwb1_mutex_;
+  std::mutex uwb2_mutex_;
 };
 
 }  // namespace VIO

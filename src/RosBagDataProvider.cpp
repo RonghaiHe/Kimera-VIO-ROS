@@ -192,9 +192,22 @@ void RosbagDataProvider::sendExternalOdometryToVio() {
 
 // 与sendImuDataToVio紧邻执行
 void RosbagDataProvider::sendUWBFrames() {
+  // Check if we have UWB messages
+  if (rosbag_data_.uwb0_msgs_.empty()) {
+    LOG(WARNING) << "No UWB0 messages in rosbag data.";
+    return;
+  }
+
+  // Log UWB message counts
+  ROS_INFO("uwb0 size: %lu, uwb1 size: %lu, uwb2 size: %lu",
+           rosbag_data_.uwb0_msgs_.size(),
+           rosbag_data_.uwb1_msgs_.size(),
+           rosbag_data_.uwb2_msgs_.size());
+
   // 检查3个uwb消息，并根据时间匹配，若s部分相同且ns部分前2位相同，则认为是同一帧
   std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_map,
       uwb1_map, uwb2_map;
+
   // 取ns 前2位有效数字插入uwb0_map
   for (const auto& uwb_msg : rosbag_data_.uwb0_msgs_) {
     // CHECK_EQ(msg->id, config_id * 3 + 0);
@@ -205,7 +218,6 @@ void RosbagDataProvider::sendUWBFrames() {
   // uwb1 时间变换，若时间在uwb0map中则加入 uwb1map
   // uwb2 时间变换， 若在uwb0map中则加入uwb2map
   for (const auto& uwb_msg : rosbag_data_.uwb1_msgs_) {
-    // CHECK_EQ(msg->id, config_id * 3 + 1);
     int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
     if (uwb0_map.find(stamp) != uwb0_map.end()) {
       uwb1_map[stamp] = uwb_msg;

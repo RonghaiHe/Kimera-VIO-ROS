@@ -7,15 +7,14 @@
 
 #include "kimera_vio_ros/RosOnlineDataProvider.h"
 
-#include <string>
-#include <vector>
-
-#include <glog/logging.h>
-
 #include <geometry_msgs/PoseStamped.h>
+#include <glog/logging.h>
 #include <sensor_msgs/image_encodings.h>
 #include <std_msgs/Bool.h>
 #include <tf2_ros/static_transform_broadcaster.h>
+
+#include <string>
+#include <vector>
 
 #include "kimera_vio_ros/utils/UtilsRos.h"
 
@@ -134,7 +133,9 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
       break;
     }
 
-    default: { LOG(FATAL) << "Frontend type not recognized."; }
+    default: {
+      LOG(FATAL) << "Frontend type not recognized.";
+    }
   }
 
   // Define Reinitializer Subscriber
@@ -166,6 +167,44 @@ RosOnlineDataProvider::RosOnlineDataProvider(const VioParams& vio_params)
                       kMaxExternalOdomQueueSize,
                       &RosOnlineDataProvider::callbackExternalOdom,
                       this);
+  }
+
+  // UWB Subscription
+  CHECK(nh_private_.getParam("use_uwb", use_uwb_));
+  if (use_uwb_) {
+    // Get UWB parameters
+    int num_robots;
+    CHECK(nh_private_.getParam("num_robots", num_robots));
+    num_robots_ = static_cast<size_t>(num_robots);
+
+    int robot_id;
+    CHECK(nh_private_.getParam("robot_id", robot_id));
+    robot_id_ = static_cast<uint16_t>(robot_id);
+
+    CHECK(nh_private_.getParam("uwb_topic", uwb_topic_));
+    CHECK(nh_private_.getParam("dis_topic", dis_topic_));
+
+    // Initialize UWB body positions
+    t_uwb_body_.resize(num_robots_, std::vector<double>(3, 0.0));
+    last_dis_.resize(3, std::vector<double>(3 * num_robots_, -1.0));
+    for (size_t id = 0; id < num_robots_; id++) {
+      for (size_t uid = 0; uid < 3; uid++) {
+        ros::param::get(
+            "~t_body_uwb" + std::to_string(id) + "_" + std::to_string(uid),
+            t_uwb_body_[id][uid]);
+      }
+    }
+
+    // Set up UWB subscribers and publisher
+    subscribeUWB();
+
+    // Create timer for processing UWB data
+    // TODO(RonghaiHe): make this a parameter
+    double uwb_process_rate = 10.0;  // 10 Hz by default
+    nh_private_.getParam("uwb_process_rate", uwb_process_rate);
+    uwb_process_timer_ = nh_.createTimer(
+        ros::Duration(1.0 / uwb_process_rate),
+        [this](const ros::TimerEvent&) { this->processUWBFrames(); });
   }
 
   publishStaticTf(vio_params_.camera_params_.at(0).body_Pose_cam_,
@@ -246,6 +285,600 @@ void RosOnlineDataProvider::subscribeRgbd(const size_t& kMaxImagesQueueSize) {
   DCHECK(sync_img_);
   sync_img_->registerCallback(
       boost::bind(&RosOnlineDataProvider::callbackRgbdImages, this, _1, _2));
+}
+
+void RosOnlineDataProvider::subscribeUWB() {
+  static constexpr size_t kMaxUWBQueueSize = 1000u;
+  uwb0_subscriber_ = nh_.subscribe(uwb_topic_ + "/0",
+                                   kMaxUWBQueueSize,
+                                   &RosOnlineDataProvider::callbackUWB0,
+                                   this);
+  uwb1_subscriber_ = nh_.subscribe(uwb_topic_ + "/1",
+                                   kMaxUWBQueueSize,
+                                   &RosOnlineDataProvider::callbackUWB1,
+                                   this);
+  uwb2_subscriber_ = nh_.subscribe(uwb_topic_ + "/2",
+                                   kMaxUWBQueueSize,
+                                   &RosOnlineDataProvider::callbackUWB2,
+                                   this);
+
+  uwb_pub_ = nh_.advertise<pose_graph_tools_msgs::UWBFrame>(
+      dis_topic_, kMaxUWBQueueSize * 18);
+}
+
+void RosOnlineDataProvider::callbackUWB0(
+    const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg) {
+  int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
+  {
+    std::lock_guard<std::mutex> lock(uwb0_mutex_);
+    uwb0_map_[stamp] = uwb_msg;
+  }
+}
+
+void RosOnlineDataProvider::callbackUWB1(
+    const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg) {
+  int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
+  {
+    std::lock_guard<std::mutex> lock(uwb1_mutex_);
+    uwb1_map_[stamp] = uwb_msg;
+  }
+}
+
+void RosOnlineDataProvider::callbackUWB2(
+    const nlink_parser::LinktrackNodeframe2ConstPtr& uwb_msg) {
+  int64_t stamp = uwb_msg->stamp.sec * 100 + uwb_msg->stamp.nsec / 1e7;
+  {
+    std::lock_guard<std::mutex> lock(uwb2_mutex_);
+    uwb2_map_[stamp] = uwb_msg;
+  }
+}
+
+void RosOnlineDataProvider::processUWBFrames() {
+  // Early return if no data from the first UWB sensor is available
+  if (uwb0_map_.empty()) {
+    return;
+  }
+
+  // Log the size of UWB data buffers (only once)
+  // ROS_INFO_ONCE(
+  //     "UWB maps sizes: uwb0 size: %lu, uwb1 size: %lu, uwb2 size: %lu",
+  //     uwb0_map_.size(),
+  //     uwb1_map_.size(),
+  //     uwb2_map_.size());
+
+  // Create maps to store UWB measurements with matching timestamps
+  std::map<int64_t, nlink_parser::LinktrackNodeframe2ConstPtr> uwb0_map_copy,
+      uwb1_map_copy, uwb2_map_copy, matching_uwb0_map, matching_uwb1_map,
+      matching_uwb2_map;
+
+  {
+    std::lock_guard<std::mutex> lock0(uwb0_mutex_);
+    if (uwb0_map_.empty()) {
+      return;
+    }
+    uwb0_map_copy = uwb0_map_;
+    uwb0_map_.clear();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock1(uwb1_mutex_);
+    uwb1_map_copy = uwb1_map_;
+    uwb1_map_.clear();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock2(uwb2_mutex_);
+    uwb2_map_copy = uwb2_map_;
+    uwb2_map_.clear();
+  }
+
+  // Find timestamps in uwb0_map that match with timestamps in uwb1_map and
+  // uwb2_map
+  for (const auto& uwb0_pair : uwb0_map_copy) {
+    int64_t stamp = uwb0_pair.first;
+    auto it1 = uwb1_map_copy.find(stamp);
+    auto it2 = uwb2_map_copy.find(stamp);
+
+    // If matching timestamp found in uwb1_map, add to matching map
+    if (it1 != uwb1_map_copy.end()) {
+      matching_uwb1_map[stamp] = it1->second;
+    }
+
+    // If matching timestamp found in uwb2_map, add to matching map
+    if (it2 != uwb2_map_copy.end()) {
+      matching_uwb2_map[stamp] = it2->second;
+    }
+    // Always include the original uwb0 data in the matching map
+    matching_uwb0_map[stamp] = uwb0_pair.second;
+  }
+
+  // Define processing parameters
+  // epsilon: Threshold for temporal consistency check (minimum change in
+  // distance between frames)
+  auto epsilon = 1e-8;
+  // sigma: Standard deviation of measurement noise (tripled for conservative
+  // filtering)
+  auto sigma = 0.0383 * 3;
+  // epsilon3: Threshold for RSSI difference between received and first path
+  // signals
+  auto epsilon3 = 10.0;
+
+  // Get UWB positions of the three UWB sensors in body frame
+  // TODO (RonghaiHe) Different robot, different t_uwb_body_
+  // Extract position of UWB sensor 0 from configuration
+  auto u0_pos =
+      gtsam::Point3(t_uwb_body_[0][0], t_uwb_body_[0][1], t_uwb_body_[0][2]);
+  auto u1_pos =
+      gtsam::Point3(t_uwb_body_[1][0], t_uwb_body_[1][1], t_uwb_body_[1][2]);
+  auto u2_pos =
+      gtsam::Point3(t_uwb_body_[2][0], t_uwb_body_[2][1], t_uwb_body_[2][2]);
+
+  // Store UWB positions in a vector for easier access
+  std::vector<gtsam::Point3> uwb_pos(3);
+  uwb_pos[0] = u0_pos;
+  uwb_pos[1] = u1_pos;
+  uwb_pos[2] = u2_pos;
+
+  // Calculate ground truth distances between UWB sensors (used for outlier
+  // rejection) Initialize matrix to store distances between sensors
+  Eigen::Matrix3d gt_dis = Eigen::Matrix3d::Zero();
+  gt_dis(0, 1) = (u0_pos - u1_pos).norm();  // Distance between UWB0 and UWB1
+  gt_dis(0, 2) = (u0_pos - u2_pos).norm();  // Distance between UWB0 and UWB2
+  gt_dis(1, 0) = gt_dis(0, 1);              // Distance is symmetric
+  gt_dis(1, 2) = (u1_pos - u2_pos).norm();  // Distance between UWB1 and UWB2
+  gt_dis(2, 0) = gt_dis(0, 2);              // Distance is symmetric
+  gt_dis(2, 1) = gt_dis(1, 2);              // Distance is symmetric
+  // gt_dis(2, 2) = 0.0;                       // Self-distance is zero
+  // gt_dis(1, 1) = 0.0;                       // Self-distance is zero
+  // gt_dis(0, 0) = 0.0;                       // Self-distance is zero
+
+  // Store iterators to previous frames for temporal consistency checks
+  // auto it0_prev = matching_uwb0_map.begin();
+  // auto it1_prev = matching_uwb1_map.begin();
+  // auto it2_prev = matching_uwb2_map.begin();
+
+  // Process each UWB frame with matching timestamps
+  for (auto it0 = matching_uwb0_map.begin(); it0 != matching_uwb0_map.end();
+       ++it0) {
+    // Find corresponding UWB frames from sensors 1 and 2
+    auto it1 = matching_uwb1_map.find(it0->first);
+    auto it2 = matching_uwb2_map.find(it0->first);
+
+    u_int num_abnormal = 0, num_normal_meas = 9;
+    std::vector<bool> unormal(3, false);
+
+    // Check if only bot0's UWB data is valid
+    // If so, skip to next frame for only 3 measurements for any other robots
+    if (it1 == matching_uwb1_map.end()) {
+      ++num_abnormal;
+      num_normal_meas -= 3;
+      unormal[1] = true;
+    }
+    if (it2 == matching_uwb2_map.end()) {
+      if (num_abnormal == 1) {
+        ROS_WARN("Only UWB0 sensor is available");
+        continue;
+      }
+      ++num_abnormal;
+      unormal[2] = true;
+    }
+
+    // bool abnormal = false;
+    for (auto& node : it0->second->nodes) {
+      if (node.id == robot_id_ * 3) {
+        continue;
+      }
+      if (last_dis_[0][node.id] < 0.0 ||
+          fabs(last_dis_[0][node.id] - node.dis) < epsilon) {
+        // ROS_WARN("Step 1: UWB0: %u, %f, %f",
+        //          node.id,
+        //          node.dis,
+        //          last_dis_[0][node.id]);
+        // abnormal = true;
+        --num_normal_meas;
+      }
+      last_dis_[0][node.id] = node.dis;
+    }
+    // if (abnormal) {
+    //   if (num_abnormal == 1) {
+    //     ROS_WARN("Step 1: Less than 6 distances are available");
+    //     continue;
+    //   }
+    //   unormal[0] = true;
+    //   ++num_abnormal;
+    // }
+    if (!unormal[1]) {
+      // abnormal = false;
+      for (auto& node : it1->second->nodes) {
+        if (node.id == robot_id_ * 3 + 1) {
+          continue;
+        }
+        if (last_dis_[1][node.id] < 0.0 ||
+            fabs(last_dis_[1][node.id] - node.dis) < epsilon) {
+          // ROS_WARN("Step 1: UWB01: %u, %f, %f",
+          //          node.id,
+          //          node.dis,
+          //          last_dis_[1][node.id]);
+          // abnormal = true;
+          --num_normal_meas;
+        }
+        last_dis_[1][node.id] = node.dis;
+      }
+      // if (abnormal) {
+      //   if (num_abnormal == 1) {
+      //     ROS_WARN("Step 1: Only 1 UWB(not 1) sensor is available");
+      //     continue;
+      //   }
+      //   unormal[1] = true;
+      //   ++num_abnormal;
+      // }
+    }
+    if (!unormal[2]) {
+      // abnormal = false;
+      for (auto& node : it2->second->nodes) {
+        if (node.id == robot_id_ * 3 + 2) {
+          continue;
+        }
+        if (last_dis_[2][node.id] < 0.0 ||
+            fabs(last_dis_[2][node.id] - node.dis) < epsilon) {
+          // ROS_WARN("Step 1: UWB2: %u, %f, %f",
+          //          node.id,
+          //          node.dis,
+          //          last_dis_[2][node.id]);
+          // abnormal = true;
+          --num_normal_meas;
+        }
+        last_dis_[2][node.id] = node.dis;
+      }
+      // if (abnormal) {
+      //   if (num_abnormal == 1) {
+      //     ROS_WARN("Step 1: Only 1 UWB(not 2) sensor is available");
+      //     continue;
+      //   }
+      //   unormal[2] = true;
+      //   ++num_abnormal;
+      // }
+    }
+    if (num_normal_meas < 6) {
+      ROS_WARN("Step 1: Less than 6 distances are available");
+    }
+
+    // Check validity of current bot's 3 UWB sensors by examining
+    // inter-sensor distances
+    // Extract distances between UWB sensors from data (d01 = distance from
+    // sensor 0 to 1)
+    if (!unormal[0]) {
+      auto d01 = it0->second->nodes[robot_id_ * 3 + 1].dis;
+      auto d02 = it0->second->nodes[robot_id_ * 3 + 2].dis;
+      unormal[0] =
+          fabs(d01 - gt_dis(0, 1)) > sigma | fabs(d02 - gt_dis(0, 2)) > sigma;
+      if (unormal[0]) {
+        // ROS_WARN("Step 2: UWB0: %f vs %f, %f vs %f",
+        //          d01,
+        //          gt_dis(0, 1),
+        //          d02,
+        //          gt_dis(0, 2));
+        if (num_abnormal == 1) {
+          ROS_WARN("Step 2: Only 1 UWB(not 0) sensor is available");
+          continue;
+        }
+        ++num_abnormal;
+      }
+    }
+    if (!unormal[1]) {
+      auto d10 = it1->second->nodes[robot_id_ * 3 + 0].dis;
+      auto d12 = it1->second->nodes[robot_id_ * 3 + 2].dis;
+      unormal[1] =
+          fabs(d10 - gt_dis(1, 0)) > sigma | fabs(d12 - gt_dis(1, 2)) > sigma;
+      if (unormal[1]) {
+        // ROS_WARN("Step 2: UWB1: %f vs %f, %f vs %f",
+        //          d10,
+        //          gt_dis(1, 0),
+        //          d12,
+        //          gt_dis(1, 2));
+        if (num_abnormal == 1) {
+          ROS_WARN("Step 2: Only 1 UWB(not 1) sensor is available");
+          continue;
+        }
+        ++num_abnormal;
+      }
+    }
+    if (!unormal[2]) {
+      auto d20 = it2->second->nodes[robot_id_ * 3 + 0].dis;
+      auto d21 = it2->second->nodes[robot_id_ * 3 + 1].dis;
+      unormal[2] =
+          fabs(d20 - gt_dis(2, 0)) > sigma | fabs(d21 - gt_dis(2, 1)) > sigma;
+      if (unormal[2]) {
+        // ROS_WARN("Step 2: UWB2: %f vs %f, %f vs %f",
+        //          d20,
+        //          gt_dis(2, 0),
+        //          d21,
+        //          gt_dis(2, 1));
+        if (num_abnormal == 1) {
+          ROS_WARN("Step 2: Only 1 UWB(not 2) sensor is available");
+          continue;
+        }
+        ++num_abnormal;
+      }
+    }
+
+    // Check each destination robot's UWB data
+    // Iterate through each possible destination robot
+    for (auto dest_id = 0; dest_id < num_robots_; dest_id++) {
+      if (dest_id == robot_id_) {
+        continue;
+      }
+      // Create a vector of maps to store valid UWB measurements from each
+      // sensor (0,1,2)
+      // Each map relates destination UWB sensor ID to its measurements
+      std::vector<std::map<int, nlink_parser::LinktrackNode2ConstPtr>>
+          effect_uwb(3);
+
+      // Get reference to nodes from UWB sensor 0
+      auto& src_u0_uwbs = it0->second->nodes;
+
+      // Step 3: Process distance data by RSSI
+      // Process each of the 3 UWB sensors on the destination robot with
+      // local ID(uid)
+      for (auto uid = 0; uid < 3; uid++) {
+        // Calculate global UID based on destination robot ID and sensor ID
+        auto global_uid = dest_id * 3 + uid;
+
+        // Process UWB0 measurements if they exist and are valid (distance > 0)
+        if (!unormal[0]) {
+          if (src_u0_uwbs.size() > global_uid &&
+              src_u0_uwbs[global_uid].dis > 0) {
+            // Skip if rx-fx > epsilon3
+            // Skip if RSSI difference exceeds threshold (potential multipath
+            // interference)
+            // rx_rssi: received signal strength indicator
+            // fp_rssi: first path signal strength indicator
+            if (src_u0_uwbs[global_uid].fp_rssi -
+                    src_u0_uwbs[global_uid].rx_rssi >
+                epsilon3) {
+              // ROS_WARN("Step 3: UWB0: %u, %f, %f",
+              //          global_uid,
+              //          src_u0_uwbs[global_uid].fp_rssi,
+              //          src_u0_uwbs[global_uid].rx_rssi);
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+            // TODO (RonghaiHe) Drop the measurement if the distance is >50
+            if (src_u0_uwbs[global_uid].dis > 50.0) {
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+
+            // Store valid measurement from UWB0 sensor
+            effect_uwb[0][uid] =
+                boost::make_shared<nlink_parser::LinktrackNode2>(
+                    (src_u0_uwbs[global_uid]));
+            // ROS_INFO("effect_uwb[0].size() = %d", effect_uwb[0].size());
+          }
+        }
+
+        // u1 checks
+        if (!unormal[1]) {
+          auto& src_u1_uwbs = it1->second->nodes;
+          if (src_u1_uwbs.size() > global_uid &&
+              src_u1_uwbs[global_uid].dis > 0) {
+            // Skip if rx-fx > epsilon3
+            if (src_u1_uwbs[global_uid].fp_rssi -
+                    src_u1_uwbs[global_uid].rx_rssi >
+                epsilon3) {
+              // ROS_WARN("Step 3: UWB01: %u, %f, %f",
+              //          global_uid,
+              //          src_u1_uwbs[global_uid].fp_rssi,
+              //          src_u1_uwbs[global_uid].rx_rssi);
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+            // TODO (RonghaiHe) Drop the measurement if the distance is >50
+            if (src_u1_uwbs[global_uid].dis > 50.0) {
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+
+            effect_uwb[1][uid] =
+                boost::make_shared<nlink_parser::LinktrackNode2>(
+                    (src_u1_uwbs[global_uid]));
+            // ROS_INFO("effect_uwb[1].size() = %d", effect_uwb[1].size());
+          }
+        }
+
+        // u2 checks
+        if (!unormal[2]) {
+          auto& src_u2_uwbs = it2->second->nodes;
+          if (src_u2_uwbs.size() > global_uid &&
+              src_u2_uwbs[global_uid].dis > 0) {
+            // Skip if rx-fx > epsilon3
+            if (src_u2_uwbs[global_uid].fp_rssi -
+                    src_u2_uwbs[global_uid].rx_rssi >
+                epsilon3) {
+              // ROS_WARN("Step 3: UWB2: %u, %f, %f",
+              //          global_uid,
+              //          src_u2_uwbs[global_uid].fp_rssi,
+              //          src_u2_uwbs[global_uid].rx_rssi);
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+            // TODO (RonghaiHe) Drop the measurement if the distance is >50
+            if (src_u2_uwbs[global_uid].dis > 50.0) {
+              if (num_abnormal == 1) {
+                // ROS_WARN("Step 3: Less than 6 distances are available");
+                break;
+              }
+              continue;
+            }
+
+            effect_uwb[2][uid] =
+                boost::make_shared<nlink_parser::LinktrackNode2>(
+                    (src_u2_uwbs[global_uid]));
+            // ROS_INFO("effect_uwb[2].size() = %d", effect_uwb[2].size());
+          }
+        }
+      }
+
+      // Skip if not enough effective data (less than 6)
+      // Ensure we have enough valid measurements (at least 6 across all 3
+      // sensors)
+      auto effect_size =
+          effect_uwb[0].size() + effect_uwb[1].size() + effect_uwb[2].size();
+      if (effect_size < 6) {
+        // LOG(WARNING) << "UWB data is not enough, only " << effect_size
+        //              << " nodes After 3rd check for no enough data to robot"
+        //              << dest_id;
+        continue;  // Skip to next destination robot
+      }
+
+      // Triangle constraint checks
+      // Maps to track consistency of measurements using triangle inequality
+      // constraint
+      // checknum: counts how many times an edge (src_id, dest_id) is checked
+      // errornum: counts how many times an edge fails the triangle inequality
+      // test
+      std::map<std::tuple<int, int>, int> checknum;
+      std::map<std::tuple<int, int>, int> errornum;
+
+      // Lambda to increment check count for an edge
+      auto check = [&](int src_id, int dest_id) {
+        if (checknum.find(std::make_tuple(src_id, dest_id)) == checknum.end()) {
+          checknum[std::make_tuple(src_id, dest_id)] = 1;
+        } else {
+          checknum[std::make_tuple(src_id, dest_id)] += 1;
+        }
+        if (errornum.find(std::make_tuple(src_id, dest_id)) == errornum.end()) {
+          errornum[std::make_tuple(src_id, dest_id)] = 0;
+        }
+      };
+
+      // Lambda to increment error count for an edge
+      auto error = [&](int src_id, int dest_id) {
+        if (errornum.find(std::make_tuple(src_id, dest_id)) == errornum.end()) {
+          LOG(WARNING) << "errornum not found";
+          errornum[std::make_tuple(src_id, dest_id)] = 1;
+        } else {
+          errornum[std::make_tuple(src_id, dest_id)] += 1;
+        }
+      };
+
+      // Check edges where one UWB is an endpoint
+      // First triangle inequality check: for each UWB sensor, test triangle
+      // formed by
+      // this sensor and pairs of destination UWB sensors
+      for (auto uid = 0; uid < 3; uid++) {
+        auto& uimap = effect_uwb[uid];
+        // Find non-duplicate pair combinations on corresponding edges
+        // Examine all unique pairs of edges from this source sensor
+        for (auto it = uimap.begin(); it != uimap.end(); ++it) {
+          for (auto it2 = std::next(it); it2 != uimap.end(); ++it2) {
+            auto uid1 = it->first;
+            auto uid2 = it2->first;
+            auto uid1_dis = it->second->dis;
+            auto uid2_dis = it2->second->dis;
+
+            // Record that these edges are being checked
+            check(uid, uid1);
+            check(uid, uid2);
+
+            auto gt_u1_u2 = gt_dis(uid1, uid2);
+
+            // Check if they can form a triangle
+            if (fabs(uid1_dis - uid2_dis) > 3 * sqrt(2) * sigma + gt_u1_u2) {
+              error(uid, uid1);
+              error(uid, uid2);
+            }
+          }
+        }
+      }
+
+      // Check edges where two UWBs are endpoints
+      // Second triangle inequality check: test triangles formed by two source
+      // UWB sensors
+      // and one destination UWB sensor
+      for (auto it1_uid = 0; it1_uid < 3; it1_uid++) {
+        for (auto it2_uid = it1_uid + 1; it2_uid < 3; it2_uid++) {
+          auto& uimap1 = effect_uwb[it1_uid];
+          auto& uimap2 = effect_uwb[it2_uid];
+          // Find nodes that exist in both edges
+          for (auto it1 = uimap1.begin(); it1 != uimap1.end(); ++it1) {
+            auto uid1 = it1->first;
+            auto uid1_dis = it1->second->dis;
+            auto it2 = uimap2.find(uid1);
+            if (it2 != uimap2.end()) {
+              auto uid2_dis = it2->second->dis;
+
+              check(it1_uid, uid1);
+              check(it2_uid, uid1);
+
+              auto gt_u1_u2 = gt_dis(it1_uid, it2_uid);
+              // Check if they can form a triangle
+              if (fabs(uid1_dis - uid2_dis) > 3 * sqrt(2) * sigma + gt_u1_u2) {
+                error(it1_uid, uid1);
+                error(it2_uid, uid1);
+              }
+            }
+          }
+        }
+      }
+
+      // Create and publish UWB frame if enough valid edges
+      pose_graph_tools_msgs::UWBFrame uwb;
+      uwb.stamp = it0->second->stamp;
+      uwb.distances.assign(9, -1.0f);
+      uwb.src_robot_id = robot_id_;
+      uwb.dst_robot_id = dest_id;
+
+      // Calculate valid edges where error/check ratio <= 0.5
+      int valid_num = 0;
+      for (auto& it : checknum) {
+        auto& kt = it.first;
+        auto& src_bot_id = std::get<0>(kt);
+        auto& dest_bot_id = std::get<1>(kt);
+        auto& check_num = it.second;
+        auto& error_num = errornum[kt];
+
+        if (error_num * 1.0 / check_num < 0.5) {
+          valid_num++;
+          uwb.distances[src_bot_id * 3 + dest_bot_id] =
+              effect_uwb[src_bot_id][dest_bot_id]->dis;
+        }
+      }
+
+      if (valid_num < 6) {
+        // LOG(WARNING) << "UWB data is not enough, only " << valid_num
+        //              << " valid edges";
+        continue;
+      }
+
+      // Publish UWB frame
+      uwb_pub_.publish(uwb);
+    }
+
+    // it0_prev = it0;
+    // it1_prev = it1;
+    // it2_prev = it2;
+  }
+
+  // Clear processed data to avoid memory buildup
+  // uwb0_map_.clear();
+  // uwb1_map_.clear();
+  // uwb2_map_.clear();
 }
 
 bool RosOnlineDataProvider::spin() {
