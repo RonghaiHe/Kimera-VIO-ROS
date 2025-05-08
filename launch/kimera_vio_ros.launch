@@ -116,6 +116,12 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
   <arg name="pipeline_flag_args" value="--flagfile=$(arg flags_folder)/Pipeline.flags"
        if="$(arg include_pipeline_flags)"/>
 
+  <arg name="include_camera_pose_visualization_flags" default="false"/>
+  <arg name="camera_pose_visualization_filename" default="CameraPose3DRobot0.flags"/>
+  <arg name="camera_pose_visualization_flag_args" 
+       value="--flagfile=$(arg flags_folder)/$(arg camera_pose_visualization_filename)"
+       if="$(arg include_camera_pose_visualization_flags)"/>
+
   <arg name="glog_dir" default=""/>
   <arg name="glog_to_dir" default="false"/>
   <arg name="glog_args" value="--logtostderr=0 --log_dir=$(arg glog_dir)" if="$(arg glog_to_dir)"/>
@@ -129,6 +135,7 @@ file and include this one to launch KimeraVIO on the dataset of your choice -->
         args="--use_lcd=$(arg use_lcd)
               --vocabulary_path=$(arg path_to_vocab)
               $(arg pipeline_flag_args)
+              $(arg camera_pose_visualization_flag_args)
               --flagfile=$(arg flags_folder)/Mesher.flags
               --flagfile=$(arg flags_folder)/VioBackend.flags
               --flagfile=$(arg flags_folder)/RegularVioBackend.flags
