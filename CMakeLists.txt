@@ -28,6 +28,7 @@ catkin_simple()
 
 cs_add_library(${PROJECT_NAME}
   # Include files are just here for IDEs
+  include/kimera_vio_ros/CameraPoseVisualization.h
   include/kimera_vio_ros/KimeraVioRos.h
   include/kimera_vio_ros/RosBagDataProvider.h
   include/kimera_vio_ros/RosDataProviderInterface.h
@@ -37,6 +38,7 @@ cs_add_library(${PROJECT_NAME}
   include/kimera_vio_ros/RosVisualizer.h
   include/kimera_vio_ros/utils/UtilsRos.h
   include/kimera_vio_ros/utils/CsvPublisher.h
+  src/CameraPoseVisualization.cpp
   src/KimeraVioRos.cpp
   src/RosDataProviderInterface.cpp
   src/RosBagDataProvider.cpp

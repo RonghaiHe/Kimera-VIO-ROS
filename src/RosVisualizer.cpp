@@ -26,12 +26,25 @@
 #include <std_msgs/Float64MultiArray.h>
 #include <tf/transform_broadcaster.h>
 #include <tf2/buffer_core.h>
+#include <visualization_msgs/MarkerArray.h>
 
 #include <string>
 
 #include "kimera_vio_ros/utils/UtilsRos.h"
 
 DECLARE_int32(viz_type);
+DEFINE_double(camera_pose_r,
+              1.0,
+              "Red component for camera pose visualization");
+DEFINE_double(camera_pose_g,
+              0.0,
+              "Green component for camera pose visualization");
+DEFINE_double(camera_pose_b,
+              0.0,
+              "Blue component for camera pose visualization");
+DEFINE_double(camera_pose_a,
+              1.0,
+              "Alpha component for camera pose visualization");
 
 namespace VIO {
 
@@ -63,6 +76,8 @@ RosVisualizer::RosVisualizer(const VioParams& vio_params)
   imu_bias_pub_ = nh_.advertise<std_msgs::Float64MultiArray>("imu_bias", 1);
   pointcloud_pub_ =
       nh_.advertise<PointCloudXYZRGB>("time_horizon_pointcloud", 1, true);
+  camera_pose_pub_ =
+      nh_.advertise<visualization_msgs::MarkerArray>("camera_poses", 1, true);
   mesh_3d_frame_pub_ = nh_.advertise<pcl_msgs::PolygonMesh>("mesh", 1, true);
 }
 
@@ -96,6 +111,9 @@ void RosVisualizer::publishBackendOutput(
   }
   if (pointcloud_pub_.getNumSubscribers() > 0) {
     publishTimeHorizonPointCloud(output);
+  }
+  if (camera_pose_pub_.getNumSubscribers() > 0) {
+    publishCameraPoses(output);
   }
 }
 
@@ -523,6 +541,44 @@ void RosVisualizer::publishTf(const BackendOutput::ConstPtr& output) {
 
   utils::gtsamPoseToRosTf(pose, &odom_tf.transform);
   tf_broadcaster_.sendTransform(odom_tf);
+}
+
+void RosVisualizer::publishCameraPoses(
+    const BackendOutput::ConstPtr& output) const {
+  CHECK(output);
+
+  const Timestamp& timestamp = output->timestamp_;
+  const gtsam::Pose3& pose = output->W_State_Blkf_.pose_;
+
+  // Create a camera pose visualization object
+  CameraPoseVisualization camera_viz(
+      Eigen::Vector3d(
+          FLAGS_camera_pose_r, FLAGS_camera_pose_g, FLAGS_camera_pose_b),
+      FLAGS_camera_pose_a);
+  camera_viz.setScale(0.5);
+
+  // Set color for the camera frustum (red)
+  Eigen::Vector3d color(
+      FLAGS_camera_pose_r, FLAGS_camera_pose_g, FLAGS_camera_pose_b);
+
+  // Get position and orientation from the pose
+  Eigen::Vector3d position(pose.x(), pose.y(), pose.z());
+  Eigen::Quaterniond quaternion = pose.rotation().toQuaternion();
+
+  // Add camera pose to the visualization
+  camera_viz.addPose(position, quaternion, color, 1.0);
+
+  // Publish the camera poses
+  std_msgs::Header header;
+  header.stamp.fromNSec(timestamp);
+  header.frame_id = odom_frame_id_;
+
+  visualization_msgs::MarkerArray markerArray_msg;
+  for (auto& marker : camera_viz.markers_) {
+    marker.header = header;
+    markerArray_msg.markers.push_back(marker);
+  }
+  camera_pose_pub_.publish(markerArray_msg);
 }
 
 }  // namespace VIO

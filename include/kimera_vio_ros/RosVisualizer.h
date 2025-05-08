@@ -24,6 +24,7 @@
 
 #include <opencv2/opencv.hpp>
 
+#include "kimera_vio_ros/CameraPoseVisualization.h"
 #include "kimera_vio_ros/RosPublishers.h"
 
 namespace VIO {
@@ -90,6 +91,8 @@ class RosVisualizer : public Visualizer3D {
   void publishDebugImage(const Timestamp& timestamp,
                          const cv::Mat& debug_image) const;
 
+  void publishCameraPoses(const BackendOutput::ConstPtr& output) const;
+
  private:
   // ROS handles
   ros::NodeHandle nh_;
@@ -103,6 +106,7 @@ class RosVisualizer : public Visualizer3D {
   ros::Publisher resiliency_pub_;
   ros::Publisher frontend_stats_pub_;
   ros::Publisher imu_bias_pub_;
+  ros::Publisher camera_pose_pub_;
 
   //! Define tf broadcaster for world to base_link (IMU) and to map (PGO).
   tf::TransformBroadcaster tf_broadcaster_;
