@@ -468,12 +468,12 @@ void RosOnlineDataProvider::processUWBFrames() {
       if (node.id == robot_id_ * 3) {
         continue;
       }
-      if (last_dis_[0][node.id] < 0.0 ||
-          fabs(last_dis_[0][node.id] - node.dis) < epsilon) {
-        // ROS_WARN("Step 1: UWB0: %u, %f, %f",
-        //          node.id,
-        //          node.dis,
-        //          last_dis_[0][node.id]);
+      // node.dis < 0.0 ||
+      if (fabs(last_dis_[0][node.id] - node.dis) < epsilon) {
+        ROS_WARN("Step 1: UWB0: %u, %f, %f",
+                 node.id,
+                 node.dis,
+                 last_dis_[0][node.id]);
         // abnormal = true;
         --num_normal_meas;
       }
@@ -493,12 +493,12 @@ void RosOnlineDataProvider::processUWBFrames() {
         if (node.id == robot_id_ * 3 + 1) {
           continue;
         }
-        if (last_dis_[1][node.id] < 0.0 ||
-            fabs(last_dis_[1][node.id] - node.dis) < epsilon) {
-          // ROS_WARN("Step 1: UWB01: %u, %f, %f",
-          //          node.id,
-          //          node.dis,
-          //          last_dis_[1][node.id]);
+        // if (node.dis < 0.0 ||
+        if (fabs(last_dis_[1][node.id] - node.dis) < epsilon) {
+          ROS_WARN("Step 1: UWB01: %u, %f, %f",
+                   node.id,
+                   node.dis,
+                   last_dis_[1][node.id]);
           // abnormal = true;
           --num_normal_meas;
         }
@@ -519,12 +519,12 @@ void RosOnlineDataProvider::processUWBFrames() {
         if (node.id == robot_id_ * 3 + 2) {
           continue;
         }
-        if (last_dis_[2][node.id] < 0.0 ||
-            fabs(last_dis_[2][node.id] - node.dis) < epsilon) {
-          // ROS_WARN("Step 1: UWB2: %u, %f, %f",
-          //          node.id,
-          //          node.dis,
-          //          last_dis_[2][node.id]);
+        // if (node.dis < 0 ||
+        if (fabs(last_dis_[2][node.id] - node.dis) < epsilon) {
+          ROS_WARN("Step 1: UWB2: %u, %f, %f",
+                   node.id,
+                   node.dis,
+                   last_dis_[2][node.id]);
           // abnormal = true;
           --num_normal_meas;
         }
@@ -541,6 +541,7 @@ void RosOnlineDataProvider::processUWBFrames() {
     }
     if (num_normal_meas < 6) {
       ROS_WARN("Step 1: Less than 6 distances are available");
+      continue;
     }
 
     // Check validity of current bot's 3 UWB sensors by examining
@@ -553,11 +554,11 @@ void RosOnlineDataProvider::processUWBFrames() {
       unormal[0] =
           fabs(d01 - gt_dis(0, 1)) > sigma | fabs(d02 - gt_dis(0, 2)) > sigma;
       if (unormal[0]) {
-        // ROS_WARN("Step 2: UWB0: %f vs %f, %f vs %f",
-        //          d01,
-        //          gt_dis(0, 1),
-        //          d02,
-        //          gt_dis(0, 2));
+        ROS_WARN("Step 2: UWB0: %f vs %f, %f vs %f",
+                 d01,
+                 gt_dis(0, 1),
+                 d02,
+                 gt_dis(0, 2));
         if (num_abnormal == 1) {
           ROS_WARN("Step 2: Only 1 UWB(not 0) sensor is available");
           continue;
@@ -571,11 +572,11 @@ void RosOnlineDataProvider::processUWBFrames() {
       unormal[1] =
           fabs(d10 - gt_dis(1, 0)) > sigma | fabs(d12 - gt_dis(1, 2)) > sigma;
       if (unormal[1]) {
-        // ROS_WARN("Step 2: UWB1: %f vs %f, %f vs %f",
-        //          d10,
-        //          gt_dis(1, 0),
-        //          d12,
-        //          gt_dis(1, 2));
+        ROS_WARN("Step 2: UWB1: %f vs %f, %f vs %f",
+                 d10,
+                 gt_dis(1, 0),
+                 d12,
+                 gt_dis(1, 2));
         if (num_abnormal == 1) {
           ROS_WARN("Step 2: Only 1 UWB(not 1) sensor is available");
           continue;
@@ -589,11 +590,11 @@ void RosOnlineDataProvider::processUWBFrames() {
       unormal[2] =
           fabs(d20 - gt_dis(2, 0)) > sigma | fabs(d21 - gt_dis(2, 1)) > sigma;
       if (unormal[2]) {
-        // ROS_WARN("Step 2: UWB2: %f vs %f, %f vs %f",
-        //          d20,
-        //          gt_dis(2, 0),
-        //          d21,
-        //          gt_dis(2, 1));
+        ROS_WARN("Step 2: UWB2: %f vs %f, %f vs %f",
+                 d20,
+                 gt_dis(2, 0),
+                 d21,
+                 gt_dis(2, 1));
         if (num_abnormal == 1) {
           ROS_WARN("Step 2: Only 1 UWB(not 2) sensor is available");
           continue;
